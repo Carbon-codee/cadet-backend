@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Content = require('../models/Content');
+// --- DÜZELTME: 'isLecturer'i doğru import ediyoruz ---
 const { protect, isLecturer } = require('../middleware/authMiddleware');
 
 // @desc    Tüm içerikleri getir (Öğrenciler için)
@@ -18,6 +19,7 @@ router.get('/', protect, async (req, res) => {
 
 // @desc    Yeni içerik oluştur (Sadece Hocalar)
 // @route   POST /api/content
+// --- DÜZELTME: 'isLecturer' middleware'i async handler'dan önce gelmeli ---
 router.post('/', protect, isLecturer, async (req, res) => {
     try {
         const { title, content, type, targetAudience, fileName, fileData } = req.body;
@@ -30,10 +32,8 @@ router.post('/', protect, isLecturer, async (req, res) => {
         const savedContent = await newContent.save();
         res.status(201).json(savedContent);
     } catch (error) {
-        res.status(500).json({ message: 'İçerik oluşturulamadı.' });
+        res.status(500).json({ message: 'İçerik oluşturulamadı: ' + error.message });
     }
 });
-
-// (Silme ve Güncelleme rotaları da buraya eklenebilir ama şimdilik bu ikisi yeterli)
 
 module.exports = router;
