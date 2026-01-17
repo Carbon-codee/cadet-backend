@@ -10,7 +10,7 @@ dotenv.config();
 connectDB();
 const app = express();
 
-const cors = require('cors');
+
 
 // İzin verilecek adreslerin listesi
 const allowedOrigins = [
