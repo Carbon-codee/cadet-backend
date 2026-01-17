@@ -6,7 +6,8 @@ const authRoutes = require('./routes/authRoutes');
 const internshipRoutes = require('./routes/internshipRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
 const userRoutes = require('./routes/userRoutes'); // userRoutes'u da import edelim
-
+app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/content', require('./routes/contentRoutes'));
 // Ayarları yükle ve veritabanına bağlan
 dotenv.config();
 connectDB();
