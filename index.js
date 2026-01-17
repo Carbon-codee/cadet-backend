@@ -10,7 +10,25 @@ dotenv.config();
 connectDB();
 const app = express();
 
-app.use(cors());
+const cors = require('cors');
+
+// İzin verilecek adreslerin listesi
+const allowedOrigins = [
+    'http://localhost:5173', // Senin bilgisayarın (Test için kalsın)
+    'cadet-frontend.vercel.app' // VERCEL LİNKİNİ BURAYA YAPIŞTIR
+];
+
+app.use(cors({
+    origin: function (origin, callback) {
+        // Eğer istek yapan adres izinli listede varsa veya adres yoksa (örn: mobil uygulama)
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            callback(new Error('Bu adresten gelen isteklere izin verilmiyor (CORS)'));
+        }
+    },
+    credentials: true
+}));
 app.use(express.json());
 
 app.get('/', (req, res) => {
