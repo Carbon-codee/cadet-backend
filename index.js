@@ -1,24 +1,27 @@
 const express = require('express');
 const dotenv = require('dotenv');
-const cors = require('cors'); // Sadece bir tane burada
+const cors = require('cors');
 const connectDB = require('./config/db');
+
+// Rota dosyalarını import et
 const authRoutes = require('./routes/authRoutes');
 const internshipRoutes = require('./routes/internshipRoutes');
 const applicationRoutes = require('./routes/applicationRoutes');
-const userRoutes = require('./routes/userRoutes'); // userRoutes'u da import edelim
-app.use('/api/users', require('./routes/userRoutes'));
-app.use('/api/content', require('./routes/contentRoutes'));
-// Ayarları yükle ve veritabanına bağlan
+const userRoutes = require('./routes/userRoutes');
+const contentRoutes = require('./routes/contentRoutes'); // Yeni content rotasını da ekle
+
+// Ayarları yükle ve DB'ye bağlan
 dotenv.config();
 connectDB();
 
+// --- ÖNCE UYGULAMAYI OLUŞTUR ---
 const app = express();
 
-// Middleware'ler (Sıralama Önemli)
-app.use(cors()); // CORS'u en başa alalım, tüm isteklere izin versin
-app.use(express.json()); // Gelen istekleri JSON olarak parse et
+// --- SONRA UYGULAMAYI KULLANAN AYARLARI YAP (MIDDLEWARE) ---
+app.use(cors());
+app.use(express.json());
 
-// Ana Rota (Test için)
+// Ana Rota
 app.get('/', (req, res) => {
     res.send('Cadet API sunucusu çalışıyor...');
 });
@@ -27,7 +30,8 @@ app.get('/', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/internships', internshipRoutes);
 app.use('/api/applications', applicationRoutes);
-app.use('/api/users', userRoutes); // Daha temiz bir kullanım
+app.use('/api/users', userRoutes);
+app.use('/api/content', contentRoutes); // Yeni content rotasını kullan
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, console.log(`Sunucu ${PORT} portunda çalışıyor...`));
