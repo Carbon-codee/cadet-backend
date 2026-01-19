@@ -229,5 +229,196 @@ router.get('/public/stats', async (req, res) => {
         res.json({ students: 150, companies: 20, matches: 45, rate: 30 });
     }
 });
+// ----------------------------------------------------------------------
+// 6. ŞİRKET İÇİN DETAYLI DASHBOARD İSTATİSTİKLERİ (HIZLI VERSİYON)
+// ----------------------------------------------------------------------
+router.get('/stats/company', protect, async (req, res) => {
+    try {
+        // Şirketin tüm ilanlarını ve içindeki başvuruları (öğrenci detaylarıyla) TEK SEFERDE çek
+        const internships = await Internship.find({ company: req.user._id })
+            .populate({
+                path: 'applicants.user',
+                select: 'name surname department classYear gpa englishLevel'
+            });
 
+        // Hesaplamaları Sunucuda Yap
+        let totalApplicants = 0;
+        let gpaSum = 0;
+        let gpaCount = 0;
+        let classDist = { 1: 0, 2: 0, 3: 0, 4: 0, other: 0 };
+        let recentApplicants = [];
+
+        // İngilizce Seviye Puanları
+        const engLevels = { 'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6 };
+        let engSum = 0;
+        let engCount = 0;
+        const engLevelNames = ["-", "A1", "A2", "B1", "B2", "C1", "C2"];
+
+        internships.forEach(ad => {
+            totalApplicants += ad.applicants.length;
+
+            ad.applicants.forEach(app => {
+                const stu = app.user;
+                if (stu) {
+                    // Son Başvuranlar Listesi (Düzleştirme)
+                    recentApplicants.push({
+                        _id: stu._id,
+                        name: stu.name,
+                        surname: stu.surname,
+                        internshipTitle: ad.title,
+                        createdAt: app.createdAt // Başvuru tarihi (Varsa)
+                    });
+
+                    // GPA
+                    if (stu.gpa) {
+                        gpaSum += Number(stu.gpa);
+                        gpaCount++;
+                    }
+                    // İngilizce
+                    if (stu.englishLevel && engLevels[stu.englishLevel]) {
+                        engSum += engLevels[stu.englishLevel];
+                        engCount++;
+                    }
+                    // Sınıf
+                    const match = String(stu.classYear).match(/\d+/);
+                    if (match) {
+                        const year = parseInt(match[0]);
+                        if (year >= 1 && year <= 4) classDist[year]++;
+                        else classDist.other++;
+                    }
+                }
+            });
+        });
+
+        // Ortalamalar
+        const avgGpa = gpaCount > 0 ? (gpaSum / gpaCount).toFixed(2) : "0.00";
+        const avgEngScore = engCount > 0 ? engSum / engCount : 0;
+        const avgEngLabel = engCount > 0 ? engLevelNames[Math.round(avgEngScore)] : "-";
+
+        // Sizi isteyenler (Ayrı sorgu ama hızlı)
+        const interestedCount = await User.countDocuments({
+            role: 'student',
+            'preferences.targetCompanies': req.user._id
+        });
+
+        // İlgilenen öğrencilerin detayları (Sadece ilk 10)
+        const interestedStudents = await User.find({
+            role: 'student',
+            'preferences.targetCompanies': req.user._id
+        }).select('name surname department classYear gpa').limit(10);
+
+        // Toplam Öğrenci Sayısı (Grafik için)
+        const totalStudentCount = await User.countDocuments({ role: 'student' });
+
+        res.json({
+            totalInternships: internships.length,
+            totalApplicants,
+            avgGpa,
+            avgEngScore,
+            avgEngLabel,
+            classDistribution: classDist,
+            recentApplicants: recentApplicants.slice(0, 5), // Sadece son 5
+            interestedCount,
+            interestedStudents,
+            totalStudentCount
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "İstatistik hatası" });
+    }
+});
+
+// ----------------------------------------------------------------------
+// 7. AKADEMİSYEN İÇİN DETAYLI İSTATİSTİKLER (HIZLI VERSİYON)
+// ----------------------------------------------------------------------
+router.get('/stats/lecturer', protect, async (req, res) => {
+    try {
+        // Tüm ilanları ve başvuruları çek
+        const internships = await Internship.find({})
+            .populate('company', 'name')
+            .populate({
+                path: 'applicants.user',
+                select: 'name surname department gpa englishLevel'
+            });
+
+        let placedCount = 0;
+        let companyMap = {};
+        let deckTotal = 0;
+        let engineTotal = 0;
+
+        // İngilizce
+        const engLevels = { 'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6 };
+        const engLevelNames = ["-", "A1", "A2", "B1", "B2", "C1", "C2"];
+        let globalGpaSum = 0;
+        let globalEngSum = 0;
+        let globalCount = 0;
+
+        internships.forEach(ad => {
+            const accepted = ad.applicants.filter(app => app.status === 'Onaylandı');
+
+            accepted.forEach(app => {
+                const stu = app.user;
+                if (!stu) return;
+
+                placedCount++;
+                globalCount++;
+                const compName = ad.company?.name || "Bilinmeyen";
+
+                // Şirket Map Başlat
+                if (!companyMap[compName]) {
+                    companyMap[compName] = { name: compName, count: 0, deck: 0, engine: 0, gpaSum: 0, engSum: 0, engCount: 0 };
+                }
+
+                const c = companyMap[compName];
+                c.count++;
+
+                // Bölüm
+                const dept = (stu.department || "").toLowerCase();
+                if (dept.includes('güverte') || dept.includes('deck')) { c.deck++; deckTotal++; }
+                else { c.engine++; engineTotal++; }
+
+                // Puanlar
+                if (stu.gpa) {
+                    c.gpaSum += Number(stu.gpa);
+                    globalGpaSum += Number(stu.gpa);
+                }
+                if (stu.englishLevel && engLevels[stu.englishLevel]) {
+                    const sc = engLevels[stu.englishLevel];
+                    c.engSum += sc;
+                    c.engCount++;
+                    globalEngSum += sc;
+                }
+            });
+        });
+
+        // Şirket verilerini formatla
+        const companyAnalysis = Object.values(companyMap).map(c => ({
+            name: c.name,
+            count: c.count,
+            deck: c.deck,
+            engine: c.engine,
+            avgGpa: c.count > 0 ? (c.gpaSum / c.count).toFixed(2) : "0.00",
+            avgEng: c.engCount > 0 ? engLevelNames[Math.round(c.engSum / c.engCount)] : "-"
+        }));
+
+        // Global Ortalamalar
+        const finalGpa = globalCount > 0 ? (globalGpaSum / globalCount).toFixed(2) : "0.00";
+        const finalEng = globalCount > 0 ? Math.round(globalEngSum / globalCount) : 0;
+
+        res.json({
+            totalPlaced: placedCount,
+            totalCompanies: Object.keys(companyMap).length,
+            globalAvgGpa: finalGpa,
+            globalAvgEng: finalEng,
+            globalAvgEngLabel: engLevelNames[finalEng] || "-",
+            companyAnalysis,
+            deptSplit: { deck: deckTotal, engine: engineTotal }
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: "İstatistik hatası" });
+    }
+});
 module.exports = router;
