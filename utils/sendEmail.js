@@ -1,28 +1,34 @@
-const sgMail = require('@sendgrid/mail');
-
-// API anahtarını ayarla
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const nodemailer = require('nodemailer');
 
 const sendEmail = async (options) => {
-    const message = {
-        to: options.email,
-        from: {
-            name: 'Cadet Platform',
-            email: process.env.SENDGRID_FROM_EMAIL // Doğruladığın mail adresi
+    // Outlook (Hotmail) SMTP Ayarları
+    const transporter = nodemailer.createTransport({
+        host: "smtp-mail.outlook.com", // Outlook sunucusu
+        port: 587, // Standart port
+        secure: false, // TLS kullan
+        auth: {
+            user: process.env.EMAIL_USER, // Render'da tanımlayacağız
+            pass: process.env.EMAIL_PASS  // Render'da tanımlayacağız
         },
+        tls: {
+            ciphers: 'SSLv3',
+            rejectUnauthorized: false // Bazen gereken ek güvenlik ayarı
+        }
+    });
+
+    const message = {
+        from: `Cadet Platform <${process.env.EMAIL_USER}>`, // Gönderen: Outlook adresin
+        to: options.email, // Alıcı: Kayıt olan öğrenci
         subject: options.subject,
-        html: options.message,
+        html: options.message
     };
 
     try {
-        await sgMail.send(message);
-        console.log('SendGrid ile mail başarıyla gönderildi.');
+        const info = await transporter.sendMail(message);
+        console.log("Mail başarıyla gönderildi. MessageID: " + info.messageId);
     } catch (error) {
-        console.error('SENDGRID HATASI:', error);
-        if (error.response) {
-            console.error(error.response.body); // Hatanın detayını göster
-        }
-        throw new Error('Email gönderilemedi (SendGrid)');
+        console.error("MAIL GÖNDERME HATASI (Nodemailer):", error);
+        throw new Error("Email gönderilemedi");
     }
 };
 
