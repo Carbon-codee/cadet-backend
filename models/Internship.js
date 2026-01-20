@@ -24,6 +24,8 @@ const internshipSchema = mongoose.Schema({
     salary: { type: Number, required: true, default: 0 },
     description: { type: String, required: true },
     department: { type: String, required: true, enum: ['Güverte', 'Makine'] },
+    // YENİ: İlanın aktiflik durumu (Varsayılan: Aktif)
+    isActive: { type: Boolean, default: true },
     applicants: [applicantSchema],
 }, {
     timestamps: true,
