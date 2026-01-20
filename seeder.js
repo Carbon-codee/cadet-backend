@@ -73,6 +73,7 @@ const importData = async () => {
                     salary: randomInt(500, 1200),
                     description: 'Uzun dönem stajyer arıyoruz.',
                     department: random(DEPARTMENTS),
+                    isActive: true,
                     applicants: []
                 });
             }
