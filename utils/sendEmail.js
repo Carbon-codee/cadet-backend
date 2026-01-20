@@ -1,34 +1,32 @@
-const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
+
+// API anahtarını ayarla (Bu, Render'daki .env'den gelecek)
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const sendEmail = async (options) => {
-    // Outlook (Hotmail) SMTP Ayarları
-    const transporter = nodemailer.createTransport({
-        host: "smtp-mail.outlook.com", // Outlook sunucusu
-        port: 587, // Standart port
-        secure: false, // TLS kullan
-        auth: {
-            user: process.env.EMAIL_USER, // Render'da tanımlayacağız
-            pass: process.env.EMAIL_PASS  // Render'da tanımlayacağız
-        },
-        tls: {
-            ciphers: 'SSLv3',
-            rejectUnauthorized: false // Bazen gereken ek güvenlik ayarı
-        }
-    });
-
+    // Mesajı SendGrid formatına göre hazırla
     const message = {
-        from: `Cadet Platform <${process.env.EMAIL_USER}>`, // Gönderen: Outlook adresin
-        to: options.email, // Alıcı: Kayıt olan öğrenci
+        to: options.email, // Alıcı: Kayıt olan kullanıcı
+        from: {
+            name: 'Cadet Platform', // Gönderen Adı
+            email: process.env.SENDGRID_FROM_EMAIL // Gönderen Mail (SendGrid'de doğruladığın)
+        },
         subject: options.subject,
-        html: options.message
+        html: options.message,
     };
 
     try {
-        const info = await transporter.sendMail(message);
-        console.log("Mail başarıyla gönderildi. MessageID: " + info.messageId);
+        await sgMail.send(message);
+        console.log(`✅ SendGrid ile mail başarıyla gönderildi: ${options.email}`);
     } catch (error) {
-        console.error("MAIL GÖNDERME HATASI (Nodemailer):", error);
-        throw new Error("Email gönderilemedi");
+        // Hata olursa detayları terminale yazdır
+        console.error('❌ SENDGRID GÖNDERİM HATASI:', error);
+        if (error.response) {
+            // SendGrid'in döndüğü spesifik hata mesajlarını göster
+            console.error(error.response.body);
+        }
+        // Hatayı yukarıya fırlat ki register fonksiyonu yakalasın
+        throw new Error('Email gönderilemedi (SendGrid)');
     }
 };
 

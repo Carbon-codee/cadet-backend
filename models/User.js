@@ -15,7 +15,7 @@ const userSchema = mongoose.Schema({
     role: { type: String, required: true, enum: ['student', 'company', 'lecturer'] },
     isVerified: { type: Boolean, default: false },
     verificationToken: { type: String },
-    // --- Öğrenciye Özel Alanlar ---
+
     department: { type: String },
     classYear: { type: String },
     gpa: { type: Number, default: 0 },
@@ -24,6 +24,9 @@ const userSchema = mongoose.Schema({
     socialActivities: { type: [String], default: [] },
     documents: { type: [documentSchema], default: [] },
     successScore: { type: Number, default: 0 },
+    resetPasswordToken: { type: String },
+    resetPasswordExpire: { type: Date },
+
     applications: [
         {
             internship: {
