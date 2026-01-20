@@ -36,6 +36,11 @@ const userSchema = mongoose.Schema({
             }
         }
     ],
+    currentStatus: {
+        type: String,
+        enum: ['Staj Arıyor', 'Staj Yapıyor', 'Okulda/Tatilde'],
+        default: 'Okulda/Tatilde'
+    },
     preferences: {
         shipTypes: { type: [String], default: [] }, // Örn: ['Konteyner', 'Tanker']
         targetCompanies: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }] // Hedeflediği Şirketler

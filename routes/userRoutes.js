@@ -421,4 +421,68 @@ router.get('/stats/lecturer', protect, async (req, res) => {
         res.status(500).json({ message: "İstatistik hatası" });
     }
 });
+
+// @desc    Öğrenci Durumunu Güncelle
+// @route   PUT /api/users/status
+router.put('/status', protect, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const user = await User.findById(req.user._id);
+
+        if (user && user.role === 'student') {
+            user.currentStatus = status;
+            await user.save();
+            res.json({ message: "Durum güncellendi", status: user.currentStatus });
+        } else {
+            res.status(400).json({ message: "İşlem başarısız." });
+        }
+    } catch (error) {
+        res.status(500).json({ message: "Sunucu hatası" });
+    }
+});
+
+// @desc    İlan için Akıllı Öğrenci Önerisi (Scouting)
+// @route   GET /api/users/scout/:internshipId
+router.get('/scout/:internshipId', protect, async (req, res) => {
+    try {
+        // Sadece şirketler görebilir
+        if (req.user.role !== 'company') return res.status(403).json({ message: "Yetkisiz" });
+
+        // 1. İlanı Bul
+        const internship = await Internship.findById(req.params.internshipId);
+        if (!internship) return res.status(404).json({ message: "İlan bulunamadı" });
+
+        const shipType = internship.shipType;
+        const companyId = req.user._id;
+
+        // 2. Uygun Öğrencileri Bul
+        // Kriterler: Rolü öğrenci + Durumu 'Staj Arıyor' + Gemi tipi tercihi uyuşuyor
+        const candidates = await User.find({
+            role: 'student',
+            currentStatus: 'Staj Arıyor',
+            'preferences.shipTypes': shipType // Dizi içinde arama yapar
+        }).select('name surname department classYear gpa englishLevel successScore preferences email');
+
+        // 3. Gruplama ve Sıralama
+        const favorited = [];
+        const others = [];
+
+        candidates.forEach(stu => {
+            const isFav = stu.preferences?.targetCompanies?.includes(companyId);
+            if (isFav) favorited.push(stu);
+            else others.push(stu);
+        });
+
+        // Puana göre azalan sırala (Yüksek puan en üstte)
+        favorited.sort((a, b) => b.successScore - a.successScore);
+        others.sort((a, b) => b.successScore - a.successScore);
+
+        res.json({ favorited, others });
+
+    } catch (error) {
+        console.error("Scout Hatası:", error);
+        res.status(500).json({ message: "Sunucu hatası" });
+    }
+});
+
 module.exports = router;
