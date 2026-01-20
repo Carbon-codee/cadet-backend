@@ -445,25 +445,32 @@ router.put('/status', protect, async (req, res) => {
 // @route   GET /api/users/scout/:internshipId
 router.get('/scout/:internshipId', protect, async (req, res) => {
     try {
-        // Sadece şirketler görebilir
         if (req.user.role !== 'company') return res.status(403).json({ message: "Yetkisiz" });
 
-        // 1. İlanı Bul
         const internship = await Internship.findById(req.params.internshipId);
         if (!internship) return res.status(404).json({ message: "İlan bulunamadı" });
 
         const shipType = internship.shipType;
         const companyId = req.user._id;
+        const internshipDept = internship.department; // 'Güverte' veya 'Makine'
 
-        // 2. Uygun Öğrencileri Bul
-        // Kriterler: Rolü öğrenci + Durumu 'Staj Arıyor' + Gemi tipi tercihi uyuşuyor
+        // Bölüm Eşleştirmesi (Mapping)
+        // İlan 'Güverte' ise -> 'Deniz Ulaştırma...' öğrencilerini getir.
+        // İlan 'Makine' ise -> 'Gemi Makineleri...' öğrencilerini getir.
+        let targetStudentDept = "";
+        if (internshipDept === 'Güverte') {
+            targetStudentDept = "Deniz Ulaştırma İşletme Mühendisliği";
+        } else if (internshipDept === 'Makine') {
+            targetStudentDept = "Gemi Makineleri İşletme Mühendisliği";
+        }
+
         const candidates = await User.find({
             role: 'student',
             currentStatus: 'Staj Arıyor',
-            'preferences.shipTypes': shipType // Dizi içinde arama yapar
+            'preferences.shipTypes': shipType,
+            department: targetStudentDept // <-- YENİ FİLTRE BURASI
         }).select('name surname department classYear gpa englishLevel successScore preferences email');
 
-        // 3. Gruplama ve Sıralama
         const favorited = [];
         const others = [];
 
@@ -473,7 +480,6 @@ router.get('/scout/:internshipId', protect, async (req, res) => {
             else others.push(stu);
         });
 
-        // Puana göre azalan sırala (Yüksek puan en üstte)
         favorited.sort((a, b) => b.successScore - a.successScore);
         others.sort((a, b) => b.successScore - a.successScore);
 
