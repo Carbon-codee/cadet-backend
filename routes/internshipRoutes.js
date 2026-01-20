@@ -137,31 +137,71 @@ router.post('/:id/apply', protect, isStudent, async (req, res) => {
 // @desc    Başvuru Durumu Güncelle (Onayla/Reddet) - Hata Düzeltildi
 // KRİTİK BÖLÜM: ŞİRKETİN ADAYLARI GÖRMESİ (GÜNCELLENDİ)
 // ---------------------------------------------------------------------
-router.get('/:id/applicants', protect, async (req, res) => {
+// @desc    Başvuru Durumu Güncelle (Onayla/Reddet/İnceleniyor)
+// @route   PUT /api/internships/:internshipId/applicants/:applicantId
+// @access  Private/Company
+router.put('/:internshipId/applicants/:applicantId', protect, isCompany, async (req, res) => {
+    const { status } = req.body;
+    const { internshipId, applicantId } = req.params;
+
+    console.log(`📡 DURUM GÜNCELLEME İSTEĞİ: İlan=${internshipId}, Öğrenci=${applicantId}, Yeni Durum=${status}`);
+
     try {
-        const internship = await Internship.findById(req.params.id)
-            // Öğrencinin TÜM detaylarını çekiyoruz
-            .populate('applicants.user', 'name surname email department classYear gpa englishLevel successScore');
-
+        // 1. İlanı ve Şirket Yetkisini Kontrol Et
+        const internship = await Internship.findById(internshipId);
         if (!internship) {
-            return res.status(404).json({ message: 'İlan bulunamadı.' });
+            console.log("❌ İlan bulunamadı.");
+            return res.status(404).json({ message: "İlan bulunamadı." });
         }
 
-        // Yetki: İlan sahibi şirket veya Hoca görebilir
-        const isOwner = req.user.role === 'company' && internship.company.toString() === req.user._id.toString();
-        const isLecturer = req.user.role === 'lecturer';
-
-        if (!isOwner && !isLecturer) {
-            return res.status(403).json({ message: 'Yetkisiz erişim.' });
+        if (internship.company.toString() !== req.user._id.toString()) {
+            console.log("❌ Yetkisiz işlem.");
+            return res.status(403).json({ message: "Bu işlem için yetkiniz yok." });
         }
 
-        // Listeyi döndür
-        res.json(internship.applicants);
+        // 2. Öğrenciyi Kontrol Et
+        const student = await User.findById(applicantId);
+        if (!student) {
+            console.log("❌ Öğrenci bulunamadı.");
+            return res.status(404).json({ message: "Öğrenci bulunamadı." });
+        }
+
+        // --- GÜNCELLEME İŞLEMİ (Internship Tarafı) ---
+        // Başvuru var mı?
+        const existingAppIndex = internship.applicants.findIndex(app => app.user.toString() === applicantId);
+
+        if (existingAppIndex !== -1) {
+            // Varsa güncelle
+            internship.applicants[existingAppIndex].status = status;
+        } else {
+            // Yoksa (veri hatası), yeni ekle
+            console.log("⚠️ Başvuru ilanda bulunamadı, yeniden ekleniyor.");
+            internship.applicants.push({ user: applicantId, status: status });
+        }
+        await internship.save();
+
+        // --- GÜNCELLEME İŞLEMİ (User Tarafı) ---
+        // Öğrencinin 'applications' dizisi var mı?
+        if (!student.applications) student.applications = [];
+
+        const studentAppIndex = student.applications.findIndex(app => app.internship && app.internship.toString() === internshipId);
+
+        if (studentAppIndex !== -1) {
+            // Varsa güncelle
+            student.applications[studentAppIndex].status = status;
+        } else {
+            // Yoksa ekle
+            console.log("⚠️ Başvuru öğrencide bulunamadı, yeniden ekleniyor.");
+            student.applications.push({ internship: internshipId, status: status });
+        }
+        await student.save();
+
+        console.log("✅ Başarı: Durum güncellendi.");
+        res.json({ message: `Durum güncellendi: ${status}` });
 
     } catch (error) {
-        console.error("Adayları getirme hatası:", error);
-        res.status(500).json({ message: 'Sunucu Hatası' });
+        console.error("🔥 SUNUCU HATASI (Update Status):", error);
+        res.status(500).json({ message: 'Sunucu hatası: ' + error.message });
     }
 });
-
 module.exports = router;
