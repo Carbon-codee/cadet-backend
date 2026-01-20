@@ -134,21 +134,47 @@ router.post('/:id/apply', protect, isStudent, async (req, res) => {
 
 // @desc    Şirketin Adayları Görmesi
 // @route   GET /api/internships/:id/applicants
-router.get('/:id/applicants', protect, async (req, res) => {
+// @desc    Başvuru Durumu Güncelle (Onayla/Reddet) - Hata Düzeltildi
+router.put('/:internshipId/applicants/:applicantId', protect, isCompany, async (req, res) => {
+    const { status } = req.body;
+    const { internshipId, applicantId } = req.params;
+
     try {
-        const internship = await Internship.findById(req.params.id)
-            .populate('applicants.user', 'name surname email department classYear gpa englishLevel');
+        const internship = await Internship.findById(internshipId);
+        const student = await User.findById(applicantId);
 
-        if (!internship) return res.status(404).json({ message: 'İlan bulunamadı.' });
+        if (!internship || !student) return res.status(404).json({ message: "Bulunamadı" });
+        if (internship.company.toString() !== req.user._id.toString()) return res.status(403).json({ message: "Yetkisiz" });
 
-        const isOwner = req.user.role === 'company' && internship.company.toString() === req.user._id.toString();
-        const isLecturer = req.user.role === 'lecturer';
+        // 1. İlanın içindeki başvuruyu güncelle
+        const appInInternship = internship.applicants.find(app => app.user.toString() === applicantId);
+        if (appInInternship) {
+            appInInternship.status = status;
+        } else {
+            // Eğer ilanda yoksa, ekle (Onarım)
+            internship.applicants.push({ user: applicantId, status: status });
+        }
 
-        if (!isOwner && !isLecturer) return res.status(403).json({ message: 'Yetkisiz erişim.' });
+        // 2. Öğrencinin içindeki başvuruyu güncelle
+        // Eğer applications dizisi yoksa oluştur
+        if (!student.applications) student.applications = [];
 
-        res.json(internship.applicants);
+        const appInStudent = student.applications.find(app => app.internship && app.internship.toString() === internshipId);
+
+        if (appInStudent) {
+            appInStudent.status = status;
+        } else {
+            // Eğer öğrencinin listesinde yoksa, ekle (Onarım)
+            student.applications.push({ internship: internshipId, status: status });
+        }
+
+        await internship.save();
+        await student.save();
+
+        res.json({ message: `Durum güncellendi: ${status}` });
     } catch (error) {
-        res.status(500).json({ message: 'Sunucu Hatası' });
+        console.error("Durum güncelleme hatası:", error);
+        res.status(500).json({ message: 'Sunucu hatası' });
     }
 });
 
