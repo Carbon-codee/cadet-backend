@@ -161,17 +161,23 @@ router.put('/:internshipId/applicants/:applicantId', protect, isCompany, async (
         await internship.save();
         await student.save();
 
-        // --- MAİL GÖNDERME İŞLEMİ (PROFESYONEL TASARIM) ---
+        // --- MAİL GÖNDERME İŞLEMİ (DÜZELTİLMİŞ & PROFESYONEL) ---
         if (status === 'Onaylandı') {
             try {
-                // Şirket ve İlan Bilgileri
+                // Şirket Adı
                 const companyName = internship.company.name;
-                const jobTitle = internship.title;
-                const studentName = `${student.name} ${student.surname}`;
-                // Canlı site adresini buraya yaz (Logoya ve butona tıklayınca gidecek yer)
-                const siteUrl = "https://marinecadet.com";
 
-                // HTML TASARIM ŞABLONU
+                // DÜZELTME: Pozisyon Adı (İlan başlığı değil, Bölüm + Stajyeri yazsın)
+                // Eğer veritabanında "Güverte" yazıyorsa "Güverte Stajyeri" yapsın.
+                let positionName = internship.department;
+                if (!positionName.toLowerCase().includes('stajyer')) {
+                    positionName += ' Stajyeri';
+                }
+
+                const studentName = `${student.name} ${student.surname}`;
+                const siteUrl = "https://marine-cadet.com";
+
+                // HTML TASARIM (MAVİ TEMA)
                 const htmlTemplate = `
                 <!DOCTYPE html>
                 <html>
@@ -185,49 +191,37 @@ router.put('/:internshipId/applicants/:applicantId', protect, isCompany, async (
                         .content { padding: 40px 30px; color: #51545E; line-height: 1.6; }
                         .status-badge { display: inline-block; background-color: #e6fcf5; color: #0ca678; padding: 8px 16px; border-radius: 50px; font-weight: bold; font-size: 14px; margin-bottom: 20px; border: 1px solid #0ca678; }
                         .info-box { background-color: #f8f9fa; border-left: 4px solid #005A9C; padding: 15px; margin: 20px 0; border-radius: 4px; }
-                        .info-item { margin-bottom: 5px; color: #333; }
+                        .info-item { margin-bottom: 8px; color: #333; font-size: 15px; }
                         .btn-container { text-align: center; margin-top: 30px; margin-bottom: 20px; }
-                        .btn { background-color: #005A9C; color: #ffffff !important; text-decoration: none; padding: 12px 25px; border-radius: 5px; font-weight: bold; display: inline-block; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+                        .btn { background-color: #005A9C; color: #ffffff !important; text-decoration: none; padding: 12px 30px; border-radius: 5px; font-weight: bold; display: inline-block; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
                         .footer { background-color: #f4f4f7; padding: 20px; text-align: center; font-size: 12px; color: #6b6e76; }
                     </style>
                 </head>
                 <body class="body">
                     <div class="container">
-                        <!-- HEADER -->
-                        <div class="header">
-                            <!-- Eğer bir logo URL'in varsa img tagi ile buraya ekleyebilirsin -->
-                            <h1>MARINE CADET</h1>
-                        </div>
-
-                        <!-- İÇERİK -->
+                        <div class="header"><h1>MARINE CADET</h1></div>
                         <div class="content">
                             <div style="text-align: center;">
                                 <div class="status-badge">✅ BAŞVURUNUZ ONAYLANDI</div>
                             </div>
-                            
                             <p>Sayın <strong>${studentName}</strong>,</p>
-                            
                             <p>Harika bir haberimiz var! 🎉 Kariyer yolculuğunuzda önemli bir adım attınız.</p>
                             
                             <div class="info-box">
                                 <div class="info-item"><strong>🏢 Şirket:</strong> ${companyName}</div>
-                                <div class="info-item"><strong>⚓ Pozisyon:</strong> ${jobTitle}</div>
+                                <div class="info-item"><strong>⚓ Pozisyon:</strong> ${positionName}</div>
+                                <div class="info-item"><strong>📅 İlan Başlığı:</strong> ${internship.title}</div>
                             </div>
 
-                            <p>Başvurunuz şirket yetkilileri tarafından incelendi ve <strong>olumlu</strong> değerlendirildi. Staj süreci ve gerekli evraklar hakkında detaylı bilgi almak için lütfen panelinizi kontrol ediniz.</p>
+                            <p>Başvurunuz şirket yetkilileri tarafından incelendi ve <strong>olumlu</strong> değerlendirildi. Staj süreci hakkında detaylı bilgi almak için lütfen panelinizi kontrol ediniz.</p>
 
-                            <!-- BUTON -->
                             <div class="btn-container">
-                                <a href="${siteUrl}/dashboard" class="btn">Panele Giriş Yap</a>
+                                <a href="${siteUrl}" class="btn">Panele Giriş Yap</a>
                             </div>
-
                             <p style="margin-top: 30px; font-size: 14px;">Denizcilik kariyerinizde başarılar dileriz,<br>Marine Cadet Ekibi</p>
                         </div>
-
-                        <!-- FOOTER -->
                         <div class="footer">
                             <p>© 2026 Marine Cadet Platformu. Tüm hakları saklıdır.</p>
-                            <p>Bu e-posta otomatik olarak oluşturulmuştur, lütfen cevaplamayınız.</p>
                         </div>
                     </div>
                 </body>
@@ -237,24 +231,8 @@ router.put('/:internshipId/applicants/:applicantId', protect, isCompany, async (
                 await sendEmail({
                     email: student.email,
                     subject: `Tebrikler! ${companyName} Başvurunuzu Onayladı ⚓`,
-                    message: `Tebrikler! ${companyName} staj başvurunuzu onayladı.`, // Düz metin yedeği
-                    html: htmlTemplate // <--- İŞTE SİHİR BURADA, YENİ TASARIMI BURAYA VERİYORUZ
+                    html: htmlTemplate
                 });
-
-                // NOT: sendEmail.js dosyasında html: options.html yoksa eklemelisin.
-                // Eğer sendEmail.js dosyan benim son attığım gibiyse, oraya 'html' parametresini şu şekilde geçmeliyiz:
-
-                // *** DÜZELTME: sendEmail çağrısını şu şekilde güncellemelisin: ***
-                /* 
-                   Burada ufak bir trik var: sendEmail.js dosyamızda 'html' parametresini options.message 
-                   üzerinden değil, doğrudan options.html olarak alacak şekilde ayarlamalıyız.
-                   
-                   Aşağıda `sendEmail` fonksiyonunun güncellenmiş halini de vereceğim.
-                */
-
-                // GEÇİCİ OLARAK `sendEmail` fonksiyonuna HTML'i `message` yerine `html` olarak göndermek için:
-                // Ancak mevcut sendEmail.js yapımızda html kısmını hardcode etmiştik.
-                // O yüzden sendEmail.js'yi esnek hale getirmeliyiz (Aşağıdaki adımı yap).
 
             } catch (emailError) {
                 console.error("Mail gönderme hatası:", emailError);

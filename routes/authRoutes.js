@@ -3,17 +3,15 @@ const router = express.Router();
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-// sendEmail importunun aktif olduğundan emin ol
-const sendEmail = require('../utils/sendEmail');
+const sendEmail = require('../utils/sendEmail'); // Resend entegreli mail fonksiyonun
 const { protect } = require('../middleware/authMiddleware');
 
 const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET || 'gizli_anahtar', { expiresIn: '30d' });
 };
 
-// @desc    Kullanıcı Kaydı (MAİL GÖNDERİMİ AKTİF)
+// @desc    Kullanıcı Kaydı + PROFESYONEL DOĞRULAMA MAİLİ
 router.post('/register', async (req, res) => {
-    // Frontend'den gelen tüm olası alanları alıyoruz
     const { name, email, password, role, department, classYear } = req.body;
 
     try {
@@ -26,26 +24,64 @@ router.post('/register', async (req, res) => {
 
         const user = await User.create({
             name, email, password, role, department, classYear,
-            isVerified: false, // ONAY BEKLİYOR
+            isVerified: false,
             verificationToken: verificationToken,
-            currentStatus: 'Okulda/Tatilde' // Varsayılan durum
+            currentStatus: 'Okulda/Tatilde'
         });
 
         if (user) {
             const verifyUrl = `${process.env.CLIENT_URL}/verify-email/${verificationToken}`;
-            const message = `
-                <div style="font-family: Arial, sans-serif; text-align: center; padding: 20px;">
-                    <h2 style="color: #002B5B;">Cadet Platformuna Hoş Geldin!</h2>
-                    <p>Hesabını aktifleştirmek için aşağıdaki butona tıkla:</p>
-                    <a href="${verifyUrl}" style="background-color: #3498db; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; display:inline-block; margin:20px 0;">Hesabımı Doğrula</a>
+            const siteUrl = "https://marinecadet.com";
+
+            // --- PROFESYONEL HOŞ GELDİN & DOĞRULAMA MAİLİ ---
+            const welcomeHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    .body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f7; width: 100%; }
+                    .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                    .header { background-color: #005A9C; padding: 30px 0; text-align: center; }
+                    .header h1 { color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; }
+                    .content { padding: 40px 30px; color: #51545E; line-height: 1.6; }
+                    .btn { background-color: #27ae60; color: #ffffff !important; text-decoration: none; padding: 12px 30px; border-radius: 5px; font-weight: bold; display: inline-block; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                    .footer { background-color: #f4f4f7; padding: 20px; text-align: center; font-size: 12px; color: #6b6e76; }
+                </style>
+            </head>
+            <body class="body">
+                <div class="container">
+                    <div class="header"><h1>ARAMIZA HOŞ GELDİN! ⚓</h1></div>
+                    <div class="content">
+                        <p>Merhaba <strong>${name}</strong>,</p>
+                        <p>Marine Cadet ailesine katıldığın için çok mutluyuz! 🎉</p>
+                        <p>Platformumuz sayesinde staj ilanlarını inceleyebilir, şirketlerle eşleşebilir ve denizcilik kariyerine güçlü bir başlangıç yapabilirsin.</p>
+                        
+                        <p>Hesabını aktifleştirmek ve hemen kullanmaya başlamak için lütfen aşağıdaki butona tıkla:</p>
+    
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="${verifyUrl}" class="btn">Hesabımı Doğrula</a>
+                        </div>
+
+                        <p style="font-size: 12px; color: #999;">Linke tıklayamıyorsanız: ${verifyUrl}</p>
+                    </div>
+                    <div class="footer">
+                        <p>© 2026 Marine Cadet Platformu.</p>
+                    </div>
                 </div>
+            </body>
+            </html>
             `;
+            // ------------------------------------------------
 
             try {
-                await sendEmail({ email: user.email, subject: 'Cadet Hesap Doğrulama', message });
+                await sendEmail({
+                    email: user.email,
+                    subject: 'Marine Cadet\'e Hoş Geldiniz! 🚢 Lütfen Hesabınızı Doğrulayın',
+                    html: welcomeHtml // HTML tasarımını gönderiyoruz
+                });
                 res.status(201).json({ message: "Kayıt başarılı! Lütfen e-postanıza gelen doğrulama linkine tıklayın." });
             } catch (emailError) {
-                // Mail gidemezse, oluşturulan kullanıcıyı silerek sistemi temiz tutuyoruz.
                 await User.findByIdAndDelete(user._id);
                 res.status(500).json({ message: "Mail gönderilemedi, kayıt işlemi başarısız oldu." });
             }
@@ -56,21 +92,17 @@ router.post('/register', async (req, res) => {
     }
 });
 
-// @desc    Kullanıcı Girişi (DOĞRULAMA KONTROLLÜ)
+// @desc    Kullanıcı Girişi
 router.post('/login', async (req, res) => {
     const { email, password } = req.body;
     try {
         const user = await User.findOne({ email });
 
         if (user && (await user.matchPassword(password))) {
-
-            // --- KONTROL DEVREDE ---
             if (!user.isVerified) {
                 return res.status(401).json({ message: "Lütfen önce e-posta adresinizi doğrulayın." });
             }
-            // ---------------------
 
-            // Başarılı girişte TÜM verileri gönder
             res.json({
                 _id: user._id,
                 token: generateToken(user._id),
@@ -98,7 +130,7 @@ router.post('/login', async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 });
 
-// @desc    E-posta Doğrulama (Linke tıklanınca çalışır)
+// @desc    E-posta Doğrulama
 router.post('/verify-email', async (req, res) => {
     const { token } = req.body;
     try {
@@ -114,7 +146,7 @@ router.post('/verify-email', async (req, res) => {
 });
 
 
-// @desc    ŞİFREMİ UNUTTUM (Mail Gönder)
+// @desc    ŞİFREMİ UNUTTUM + PROFESYONEL TURUNCU MAİL
 router.post('/forgot-password', async (req, res) => {
     const { email } = req.body;
     try {
@@ -127,11 +159,55 @@ router.post('/forgot-password', async (req, res) => {
         await user.save({ validateBeforeSave: false });
 
         const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
-        const message = `<h2>Şifre Sıfırlama İsteği</h2><p>Şifreni sıfırlamak için aşağıdaki linke tıkla (10 dakika geçerlidir):</p><a href="${resetUrl}">Şifremi Sıfırla</a>`;
 
-        await sendEmail({ email: user.email, subject: 'Cadet Şifre Sıfırlama', message });
+        // --- GÜVENLİK TEMALI (TURUNCU) TASARIM ---
+        const resetHtml = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                .body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #f4f4f7; width: 100%; }
+                .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                .header { background-color: #d9480f; padding: 30px 0; text-align: center; }
+                .header h1 { color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; }
+                .content { padding: 40px 30px; color: #51545E; line-height: 1.6; }
+                .btn { background-color: #d9480f; color: #ffffff !important; text-decoration: none; padding: 12px 30px; border-radius: 5px; font-weight: bold; display: inline-block; }
+                .footer { background-color: #f4f4f7; padding: 20px; text-align: center; font-size: 12px; color: #6b6e76; }
+            </style>
+        </head>
+        <body class="body">
+            <div class="container">
+                <div class="header"><h1>ŞİFRE SIFIRLAMA</h1></div>
+                <div class="content">
+                    <p>Merhaba,</p>
+                    <p>Hesabınız için bir şifre sıfırlama talebi aldık. Bu işlemi siz yapmadıysanız, hesabınız güvendedir ve bu maili silebilirsiniz.</p>
+                    <p>Şifrenizi yenilemek için aşağıdaki butona tıklayın (Link 10 dakika geçerlidir):</p>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${resetUrl}" class="btn">Şifremi Sıfırla</a>
+                    </div>
+                    
+                    <p style="font-size: 12px; color: #999;">Butona tıklayamıyorsanız: ${resetUrl}</p>
+                </div>
+                <div class="footer">
+                    <p>© 2026 Marine Cadet Platformu.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        `;
+        // -----------------------------------------
+
+        await sendEmail({
+            email: user.email,
+            subject: 'Güvenlik Uyarısı: Şifre Sıfırlama Talebi 🔐',
+            html: resetHtml // HTML Tasarımı
+        });
+
         res.json({ message: 'Şifre sıfırlama linki e-postanıza gönderildi.' });
     } catch (error) {
+        console.error("Forgot Password Error:", error);
         res.status(500).json({ message: "İşlem sırasında hata oluştu." });
     }
 });
@@ -158,7 +234,7 @@ router.put('/reset-password/:token', async (req, res) => {
     }
 });
 
-// @desc    Kullanıcı Profilini Getir (Token ile)
+// @desc    Kullanıcı Profilini Getir
 router.get('/profile/me', protect, async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('-password');
