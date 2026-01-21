@@ -4,6 +4,10 @@ const Internship = require('../models/Internship');
 const User = require('../models/User');
 const { protect, isCompany, isStudent } = require('../middleware/authMiddleware');
 
+// --- YENİ EKLENEN: Mail Gönderme Fonksiyonu ---
+const sendEmail = require('../utils/sendEmail');
+// ----------------------------------------------
+
 // 1. Tüm AKTİF ilanları getir (Öğrenciler için)
 router.get('/', async (req, res) => {
     try {
@@ -109,7 +113,7 @@ router.post('/:id/apply', protect, isStudent, async (req, res) => {
     }
 });
 
-// 8. ADAYLARI GETİR (BU EKSİKTİ!)
+// 8. ADAYLARI GETİR
 router.get('/:id/applicants', protect, async (req, res) => {
     try {
         const internship = await Internship.findById(req.params.id)
@@ -129,32 +133,63 @@ router.get('/:id/applicants', protect, async (req, res) => {
     }
 });
 
-// 9. Başvuru Durumunu Güncelle (Onayla/Reddet)
+// 9. Başvuru Durumunu Güncelle (Onayla/Reddet) + MAİL GÖNDERİMİ
 router.put('/:internshipId/applicants/:applicantId', protect, isCompany, async (req, res) => {
     const { status } = req.body;
     const { internshipId, applicantId } = req.params;
 
     try {
-        const internship = await Internship.findById(internshipId);
+        // İlanı bulurken şirketin adını da çekiyoruz (populate) ki mailde yazalım
+        const internship = await Internship.findById(internshipId).populate('company', 'name');
         const student = await User.findById(applicantId);
 
         if (!internship || !student) return res.status(404).json({ message: "Bulunamadı" });
-        if (internship.company.toString() !== req.user._id.toString()) return res.status(403).json({ message: "Yetkisiz" });
+        if (internship.company._id.toString() !== req.user._id.toString()) return res.status(403).json({ message: "Yetkisiz" });
 
         // İlandaki durumu güncelle
         const appInInternship = internship.applicants.find(app => app.user.toString() === applicantId);
         if (appInInternship) appInInternship.status = status;
-        else internship.applicants.push({ user: applicantId, status: status }); // Yoksa ekle (fix)
+        else internship.applicants.push({ user: applicantId, status: status });
 
         // Öğrencideki durumu güncelle
         if (!student.applications) student.applications = [];
         const appInStudent = student.applications.find(app => app.internship && app.internship.toString() === internshipId);
 
         if (appInStudent) appInStudent.status = status;
-        else student.applications.push({ internship: internshipId, status: status }); // Yoksa ekle (fix)
+        else student.applications.push({ internship: internshipId, status: status });
 
         await internship.save();
         await student.save();
+
+        // --- MAİL GÖNDERME İŞLEMİ (EĞER ONAYLANDIYSA) ---
+        if (status === 'Onaylandı') {
+            try {
+                const mailMessage = `
+Merhaba ${student.name} ${student.surname},
+
+Güzel bir haberimiz var! 🎉
+
+"${internship.company.name}" şirketi, "${internship.title}" pozisyonu için yaptığınız staj başvurusunu ONAYLADI.
+
+Staj sürecinizle ilgili sonraki adımlar için lütfen şirketle iletişime geçin veya Marine Cadet panelinizi kontrol edin.
+
+Başarılar dileriz,
+Marine Cadet Ekibi
+                `;
+
+                await sendEmail({
+                    email: student.email,
+                    subject: 'Tebrikler! Staj Başvurunuz Onaylandı 🚢',
+                    message: mailMessage
+                });
+
+                console.log(`Onay maili gönderildi: ${student.email}`);
+            } catch (emailError) {
+                console.error("Mail gönderme hatası:", emailError);
+                // Mail gitmese bile veritabanı işlemi başarılı olduğu için akışı bozmuyoruz.
+            }
+        }
+        // ------------------------------------------------
 
         res.json({ message: `Durum güncellendi: ${status}` });
     } catch (error) {

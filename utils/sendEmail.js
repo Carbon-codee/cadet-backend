@@ -1,32 +1,38 @@
-const sgMail = require('@sendgrid/mail');
+const { Resend } = require('resend');
 
-// API anahtarını ayarla (Bu, Render'daki .env'den gelecek)
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// API Key'in yüklü olduğundan emin ol
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const sendEmail = async (options) => {
-    // Mesajı SendGrid formatına göre hazırla
-    const message = {
-        to: options.email, // Alıcı: Kayıt olan kullanıcı
-        from: {
-            name: 'Cadet Platform', // Gönderen Adı
-            email: process.env.SENDGRID_FROM_EMAIL // Gönderen Mail (SendGrid'de doğruladığın)
-        },
-        subject: options.subject,
-        html: options.message,
-    };
-
     try {
-        await sgMail.send(message);
-        console.log(`✅ SendGrid ile mail başarıyla gönderildi: ${options.email}`);
-    } catch (error) {
-        // Hata olursa detayları terminale yazdır
-        console.error('❌ SENDGRID GÖNDERİM HATASI:', error);
-        if (error.response) {
-            // SendGrid'in döndüğü spesifik hata mesajlarını göster
-            console.error(error.response.body);
+        const { data, error } = await resend.emails.send({
+            from: process.env.EMAIL_FROM || 'onboarding@resend.dev', // Doğrulanmış domainin veya test maili
+            to: options.email,
+            subject: options.subject,
+            // Hem düz metin hem HTML desteği
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                    <h2 style="color: #005A9C;">Marine Cadet Bildirimi</h2>
+                    <p style="font-size: 16px;">${options.message.replace(/\n/g, '<br>')}</p>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;" />
+                    <p style="font-size: 12px; color: #888;">Bu e-posta Marine Cadet sistemi tarafından otomatik gönderilmiştir.</p>
+                </div>
+            `,
+            text: options.message // HTML desteklemeyen cihazlar için yedek
+        });
+
+        if (error) {
+            console.error("Resend Hatası:", error);
+            throw new Error("Mail gönderilemedi: " + error.message);
         }
-        // Hatayı yukarıya fırlat ki register fonksiyonu yakalasın
-        throw new Error('Email gönderilemedi (SendGrid)');
+
+        console.log("Mail başarıyla gönderildi ID:", data.id);
+        return data;
+
+    } catch (err) {
+        console.error("Mail Servis Hatası:", err);
+        // Hata olsa bile uygulamanın çökmemesi için hatayı fırlatmıyoruz, sadece logluyoruz
+        // Ancak kritik işlemlerde (şifre sıfırlama) bunu handle etmelisin.
     }
 };
 
