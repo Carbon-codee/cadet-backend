@@ -52,10 +52,11 @@ const userSchema = mongoose.Schema({
     office: { type: String, default: '' },  // D-203 vb.
     // --- Şirkete Özel Alanlar ---
     companyInfo: {
-        website: { type: String, default: '' },
-        address: { type: String, default: '' },
-        about: { type: String, default: '' },
-    },
+        about: { type: String },
+        address: { type: String },
+        website: { type: String },
+        sector: { type: String }  // <-- BU SATIR MUTLAKA OLMALI!
+    }
 
 }, { timestamps: true });
 

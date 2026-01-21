@@ -8,33 +8,25 @@ const { protect } = require('../middleware/authMiddleware');
 const Internship = require('../models/Internship');
 
 // --- HATA AYIKLAMA LOGU ---
-// Sunucu başladığında bu satır terminalde görünmeli
 console.log("Internship Modeli Yüklendi:", Internship ? "EVET" : "HAYIR");
-// --------------------------
 
 // @desc    Giriş yapmış öğrencinin başvurularını getir
 router.get('/my-applications', protect, async (req, res) => {
     try {
-        // 1. Kullanıcıyı çek
         const user = await User.findById(req.user._id).select('applications');
-
         if (!user) return res.status(404).json({ message: "Kullanıcı bulunamadı." });
 
         const applications = user.applications || [];
         if (applications.length === 0) return res.json([]);
 
-        // 2. İlan ID'lerini topla
         const internshipIds = applications
             .filter(app => app && app.internship)
             .map(app => app.internship);
 
-        // 3. İlanları çek (HATA VEREN KISIM BURASIYDI)
-        // Eğer Internship modeli düzgün yüklenmediyse burada patlar.
         const internships = await Internship.find({ '_id': { $in: internshipIds } })
             .select('title company')
             .populate('company', 'name');
 
-        // 4. Haritala ve Birleştir
         const internshipMap = {};
         internships.forEach(i => {
             if (i._id) internshipMap[i._id.toString()] = i;
@@ -71,8 +63,6 @@ router.get('/my-applications', protect, async (req, res) => {
     }
 });
 
-// --- DİĞER ROTALAR (PROFİL, MAİL, ŞİFRE) ---
-
 router.put('/update-email', protect, async (req, res) => {
     try {
         const { newEmail } = req.body;
@@ -91,6 +81,7 @@ router.put('/update-password', protect, async (req, res) => {
     } catch (e) { res.status(500).json({ message: "Hata" }); }
 });
 
+// --- PROFİL GÜNCELLEME (KRİTİK DÜZELTME BURADA YAPILDI) ---
 router.put('/profile', protect, async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
@@ -103,34 +94,52 @@ router.put('/profile', protect, async (req, res) => {
             user.email = req.body.email || user.email;
 
             // Öğrenci Alanları
-            user.classYear = req.body.classYear || user.classYear;
-            user.gpa = req.body.gpa || user.gpa;
-            user.englishLevel = req.body.englishLevel || user.englishLevel;
-            user.successScore = req.body.successScore || user.successScore;
-            user.socialActivities = req.body.socialActivities || user.socialActivities;
-            user.documents = req.body.documents || user.documents;
-            user.preferences = req.body.preferences || user.preferences;
-
-            // --- AKADEMİSYEN ALANLARI (BUNLAR EKSİKSE EKLENMELİ) ---
-            user.title = req.body.title || user.title;
-            user.office = req.body.office || user.office;
-            // -------------------------------------------------------
-
-            // Şirket Alanları
-            if (req.body.companyInfo && user.role === 'company') {
-                user.companyInfo = { ...user.companyInfo, ...req.body.companyInfo };
+            if (user.role === 'student') {
+                user.classYear = req.body.classYear || user.classYear;
+                user.gpa = req.body.gpa || user.gpa;
+                user.englishLevel = req.body.englishLevel || user.englishLevel;
+                user.successScore = req.body.successScore || user.successScore;
+                user.socialActivities = req.body.socialActivities || user.socialActivities;
+                user.documents = req.body.documents || user.documents;
+                user.preferences = req.body.preferences || user.preferences;
             }
 
-            const updatedUser = await user.save();
+            // Akademisyen Alanları
+            if (user.role === 'lecturer') {
+                user.title = req.body.title || user.title;
+                user.office = req.body.office || user.office;
+            }
 
-            // Güncel veriyi döndürürken token da ekleyelim (Frontend state'i bozulmasın diye)
-            // (Login'deki gibi tam obje döndürmek en sağlıklısı ama şimdilik user yeterli)
+            // --- ŞİRKET ALANLARI DÜZELTMESİ ---
+            if (user.role === 'company') {
+                // Mevcut veriyi al, yoksa boş obje yap
+                let currentInfo = user.companyInfo || {};
+                // Body'den gelen companyInfo
+                let incomingInfo = req.body.companyInfo || {};
+
+                // Sektör verisi (Frontend bazen root'a bazen companyInfo içine koyuyor olabilir)
+                // Öncelik: req.body.sector -> req.body.companyInfo.sector -> mevcut veri
+                let sectorUpdate = req.body.sector || incomingInfo.sector || currentInfo.sector;
+
+                user.companyInfo = {
+                    sector: sectorUpdate, // Sektörü garantiye al
+                    website: incomingInfo.website || currentInfo.website,
+                    address: incomingInfo.address || currentInfo.address,
+                    about: incomingInfo.about || currentInfo.about
+                };
+
+                // Mongoose'a iç içe objenin değiştiğini bildir (Nested object güncelleme sorunu için)
+                user.markModified('companyInfo');
+            }
+            // ----------------------------------
+
+            const updatedUser = await user.save();
             res.json(updatedUser);
         } else {
             res.status(404).json({ message: 'Kullanıcı bulunamadı' });
         }
     } catch (error) {
-        console.error(error);
+        console.error("Profil Güncelleme Hatası:", error);
         res.status(500).json({ message: 'Hata oluştu' });
     }
 });
@@ -143,7 +152,7 @@ router.get('/:id', protect, async (req, res) => {
     } catch (e) { res.status(500).json({ message: "Hata" }); }
 });
 
-// @desc    Tüm Şirketleri Listele (Öğrencinin seçmesi için)
+// @desc    Tüm Şirketleri Listele
 router.get('/list/companies', protect, async (req, res) => {
     try {
         const companies = await User.find({ role: 'company' }).select('name _id');
@@ -153,19 +162,13 @@ router.get('/list/companies', protect, async (req, res) => {
     }
 });
 
-// @desc    Şirket için Eşleşen Öğrencileri Getir (AKILLI EŞLEŞTİRME)
+// @desc    Şirket için Eşleşen Öğrencileri Getir
 router.get('/company/matches', protect, async (req, res) => {
     try {
-        // Sadece şirketler kullanabilir
         if (req.user.role !== 'company') {
             return res.status(403).json({ message: "Yetkisiz işlem." });
         }
-
         const companyId = req.user._id;
-
-        // Kriter 1: Öğrenci direkt bu şirketi favorilemiş mi?
-        // Kriter 2: (Opsiyonel) İleride şirketin gemi tipine göre de eşleştirme yapılabilir.
-
         const matchedStudents = await User.find({
             role: 'student',
             'preferences.targetCompanies': companyId
@@ -181,7 +184,6 @@ router.get('/company/matches', protect, async (req, res) => {
 
 router.get('/count/students', protect, async (req, res) => {
     try {
-        // Rolü 'student' olanların sayısını al (countDocuments en hızlısıdır)
         const count = await User.countDocuments({ role: 'student' });
         res.json(count);
     } catch (error) {
@@ -192,14 +194,8 @@ router.get('/count/students', protect, async (req, res) => {
 
 router.get('/public/stats', async (req, res) => {
     try {
-        // 1. Toplam Öğrenci Sayısı
         const studentCount = await User.countDocuments({ role: 'student' });
-
-        // 2. Toplam Şirket Sayısı
         const companyCount = await User.countDocuments({ role: 'company' });
-
-        // 3. Toplam Eşleşme (Onaylanan Başvurular)
-        // Tüm ilanları tarayıp, içindeki 'Onaylandı' statüsündeki başvuruları sayıyoruz
         const internships = await Internship.find({}).select('applicants');
         let totalMatches = 0;
 
@@ -210,7 +206,6 @@ router.get('/public/stats', async (req, res) => {
             }
         });
 
-        // 4. İşe Yerleşme Oranı (Eşleşme / Toplam Öğrenci)
         let placementRate = 0;
         if (studentCount > 0) {
             placementRate = Math.round((totalMatches / studentCount) * 100);
@@ -225,30 +220,24 @@ router.get('/public/stats', async (req, res) => {
 
     } catch (error) {
         console.error("İstatistik hatası:", error);
-        // Hata olursa varsayılan (fake) veriler dön ki site bozulmasın
         res.json({ students: 150, companies: 20, matches: 45, rate: 30 });
     }
 });
-// ----------------------------------------------------------------------
-// 6. ŞİRKET İÇİN DETAYLI DASHBOARD İSTATİSTİKLERİ (HIZLI VERSİYON)
-// ----------------------------------------------------------------------
+
+// Şirket İstatistikleri
 router.get('/stats/company', protect, async (req, res) => {
     try {
-        // Şirketin tüm ilanlarını ve içindeki başvuruları (öğrenci detaylarıyla) TEK SEFERDE çek
         const internships = await Internship.find({ company: req.user._id })
             .populate({
                 path: 'applicants.user',
                 select: 'name surname department classYear gpa englishLevel'
             });
 
-        // Hesaplamaları Sunucuda Yap
         let totalApplicants = 0;
         let gpaSum = 0;
         let gpaCount = 0;
         let classDist = { 1: 0, 2: 0, 3: 0, 4: 0, other: 0 };
         let recentApplicants = [];
-
-        // İngilizce Seviye Puanları
         const engLevels = { 'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6 };
         let engSum = 0;
         let engCount = 0;
@@ -256,30 +245,24 @@ router.get('/stats/company', protect, async (req, res) => {
 
         internships.forEach(ad => {
             totalApplicants += ad.applicants.length;
-
             ad.applicants.forEach(app => {
                 const stu = app.user;
                 if (stu) {
-                    // Son Başvuranlar Listesi (Düzleştirme)
                     recentApplicants.push({
                         _id: stu._id,
                         name: stu.name,
                         surname: stu.surname,
                         internshipTitle: ad.title,
-                        createdAt: app.createdAt // Başvuru tarihi (Varsa)
+                        createdAt: app.createdAt
                     });
-
-                    // GPA
                     if (stu.gpa) {
                         gpaSum += Number(stu.gpa);
                         gpaCount++;
                     }
-                    // İngilizce
                     if (stu.englishLevel && engLevels[stu.englishLevel]) {
                         engSum += engLevels[stu.englishLevel];
                         engCount++;
                     }
-                    // Sınıf
                     const match = String(stu.classYear).match(/\d+/);
                     if (match) {
                         const year = parseInt(match[0]);
@@ -290,24 +273,20 @@ router.get('/stats/company', protect, async (req, res) => {
             });
         });
 
-        // Ortalamalar
         const avgGpa = gpaCount > 0 ? (gpaSum / gpaCount).toFixed(2) : "0.00";
         const avgEngScore = engCount > 0 ? engSum / engCount : 0;
         const avgEngLabel = engCount > 0 ? engLevelNames[Math.round(avgEngScore)] : "-";
 
-        // Sizi isteyenler (Ayrı sorgu ama hızlı)
         const interestedCount = await User.countDocuments({
             role: 'student',
             'preferences.targetCompanies': req.user._id
         });
 
-        // İlgilenen öğrencilerin detayları (Sadece ilk 10)
         const interestedStudents = await User.find({
             role: 'student',
             'preferences.targetCompanies': req.user._id
         }).select('name surname department classYear gpa').limit(10);
 
-        // Toplam Öğrenci Sayısı (Grafik için)
         const totalStudentCount = await User.countDocuments({ role: 'student' });
 
         res.json({
@@ -317,7 +296,7 @@ router.get('/stats/company', protect, async (req, res) => {
             avgEngScore,
             avgEngLabel,
             classDistribution: classDist,
-            recentApplicants: recentApplicants.slice(0, 5), // Sadece son 5
+            recentApplicants: recentApplicants.slice(0, 5),
             interestedCount,
             interestedStudents,
             totalStudentCount
@@ -329,12 +308,9 @@ router.get('/stats/company', protect, async (req, res) => {
     }
 });
 
-// ----------------------------------------------------------------------
-// 7. AKADEMİSYEN İÇİN DETAYLI İSTATİSTİKLER (HIZLI VERSİYON)
-// ----------------------------------------------------------------------
+// Akademisyen İstatistikleri
 router.get('/stats/lecturer', protect, async (req, res) => {
     try {
-        // Tüm ilanları ve başvuruları çek
         const internships = await Internship.find({})
             .populate('company', 'name')
             .populate({
@@ -346,8 +322,6 @@ router.get('/stats/lecturer', protect, async (req, res) => {
         let companyMap = {};
         let deckTotal = 0;
         let engineTotal = 0;
-
-        // İngilizce
         const engLevels = { 'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6 };
         const engLevelNames = ["-", "A1", "A2", "B1", "B2", "C1", "C2"];
         let globalGpaSum = 0;
@@ -356,7 +330,6 @@ router.get('/stats/lecturer', protect, async (req, res) => {
 
         internships.forEach(ad => {
             const accepted = ad.applicants.filter(app => app.status === 'Onaylandı');
-
             accepted.forEach(app => {
                 const stu = app.user;
                 if (!stu) return;
@@ -365,20 +338,16 @@ router.get('/stats/lecturer', protect, async (req, res) => {
                 globalCount++;
                 const compName = ad.company?.name || "Bilinmeyen";
 
-                // Şirket Map Başlat
                 if (!companyMap[compName]) {
                     companyMap[compName] = { name: compName, count: 0, deck: 0, engine: 0, gpaSum: 0, engSum: 0, engCount: 0 };
                 }
-
                 const c = companyMap[compName];
                 c.count++;
 
-                // Bölüm
                 const dept = (stu.department || "").toLowerCase();
                 if (dept.includes('güverte') || dept.includes('deck')) { c.deck++; deckTotal++; }
                 else { c.engine++; engineTotal++; }
 
-                // Puanlar
                 if (stu.gpa) {
                     c.gpaSum += Number(stu.gpa);
                     globalGpaSum += Number(stu.gpa);
@@ -392,7 +361,6 @@ router.get('/stats/lecturer', protect, async (req, res) => {
             });
         });
 
-        // Şirket verilerini formatla
         const companyAnalysis = Object.values(companyMap).map(c => ({
             name: c.name,
             count: c.count,
@@ -402,7 +370,6 @@ router.get('/stats/lecturer', protect, async (req, res) => {
             avgEng: c.engCount > 0 ? engLevelNames[Math.round(c.engSum / c.engCount)] : "-"
         }));
 
-        // Global Ortalamalar
         const finalGpa = globalCount > 0 ? (globalGpaSum / globalCount).toFixed(2) : "0.00";
         const finalEng = globalCount > 0 ? Math.round(globalEngSum / globalCount) : 0;
 
@@ -422,13 +389,10 @@ router.get('/stats/lecturer', protect, async (req, res) => {
     }
 });
 
-// @desc    Öğrenci Durumunu Güncelle
-// @route   PUT /api/users/status
 router.put('/status', protect, async (req, res) => {
     try {
         const { status } = req.body;
         const user = await User.findById(req.user._id);
-
         if (user && user.role === 'student') {
             user.currentStatus = status;
             await user.save();
@@ -441,8 +405,6 @@ router.put('/status', protect, async (req, res) => {
     }
 });
 
-// @desc    İlan için Akıllı Öğrenci Önerisi (Scouting)
-// @route   GET /api/users/scout/:internshipId
 router.get('/scout/:internshipId', protect, async (req, res) => {
     try {
         if (req.user.role !== 'company') return res.status(403).json({ message: "Yetkisiz" });
@@ -452,11 +414,7 @@ router.get('/scout/:internshipId', protect, async (req, res) => {
 
         const shipType = internship.shipType;
         const companyId = req.user._id;
-        const internshipDept = internship.department; // 'Güverte' veya 'Makine'
-
-        // Bölüm Eşleştirmesi (Mapping)
-        // İlan 'Güverte' ise -> 'Deniz Ulaştırma...' öğrencilerini getir.
-        // İlan 'Makine' ise -> 'Gemi Makineleri...' öğrencilerini getir.
+        const internshipDept = internship.department;
         let targetStudentDept = "";
         if (internshipDept === 'Güverte') {
             targetStudentDept = "Deniz Ulaştırma İşletme Mühendisliği";
@@ -468,7 +426,7 @@ router.get('/scout/:internshipId', protect, async (req, res) => {
             role: 'student',
             currentStatus: 'Staj Arıyor',
             'preferences.shipTypes': shipType,
-            department: targetStudentDept // <-- YENİ FİLTRE BURASI
+            department: targetStudentDept
         }).select('name surname department classYear gpa englishLevel successScore preferences email');
 
         const favorited = [];
