@@ -368,8 +368,18 @@ router.get('/stats/lecturer', protect, async (req, res) => {
                 c.count++;
 
                 const dept = (stu.department || "").toLowerCase();
-                if (dept.includes('güverte') || dept.includes('deck')) { c.deck++; deckTotal++; }
-                else { c.engine++; engineTotal++; }
+
+                // Güverte Kontrolü
+                if (dept.includes('güverte') || dept.includes('deck') || dept.includes('deniz ulaştırma')) {
+                    c.deck++;
+                    deckTotal++;
+                }
+                // Makine Kontrolü (Artık else değil, explicit check)
+                else if (dept.includes('makine') || dept.includes('engine') || dept.includes('gemi makineleri')) {
+                    c.engine++;
+                    engineTotal++;
+                }
+                // Diğer durumlarda (Bölüm girilmemişse vs.) hiçbirine ekleme yapmıyoruz.
 
                 if (stu.gpa) {
                     c.gpaSum += Number(stu.gpa);
