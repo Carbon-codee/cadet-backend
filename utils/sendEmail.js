@@ -1,6 +1,15 @@
 const { Resend } = require('resend');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend;
+try {
+    if (process.env.RESEND_API_KEY) {
+        resend = new Resend(process.env.RESEND_API_KEY);
+    } else {
+        console.warn("UYARI: RESEND_API_KEY bulunamadı. Mail gönderimi çalışmayacak.");
+    }
+} catch (error) {
+    console.error("Resend başlatılamadı:", error.message);
+}
 
 const sendEmail = async (options) => {
     try {
@@ -18,6 +27,11 @@ const sendEmail = async (options) => {
                     <p style="font-size: 12px; color: #888;">Marine Cadet Ekibi</p>
                 </div>
             `;
+        }
+
+        if (!resend) {
+            console.error("Mail gönderilemedi: Resend client başlatılmamış (API Key eksik olabilir).");
+            return;
         }
 
         const { data, error } = await resend.emails.send({

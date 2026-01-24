@@ -23,7 +23,16 @@ const userSchema = mongoose.Schema({
     bio: { type: String, default: '' },
     socialActivities: { type: [String], default: [] },
     documents: { type: [documentSchema], default: [] },
+    transcript: { // YENİ
+        type: [{
+            courseName: String,
+            grade: String
+        }],
+        default: []
+    },
     successScore: { type: Number, default: 0 },
+    xp: { type: Number, default: 0 }, // Gamification XP
+    level: { type: Number, default: 1 }, // Calculated from XP
     resetPasswordToken: { type: String },
     resetPasswordExpire: { type: Date },
 

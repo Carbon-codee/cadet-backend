@@ -81,6 +81,23 @@ router.put('/update-password', protect, async (req, res) => {
     } catch (e) { res.status(500).json({ message: "Hata" }); }
 });
 
+// @desc    Kendi profilini getir (Dashboard için gerekli)
+router.get('/profile', protect, async (req, res) => {
+    try {
+        // Hedef şirketleri populate et
+        const user = await User.findById(req.user._id)
+            .populate('preferences.targetCompanies', 'name');
+
+        if (!user) {
+            return res.status(404).json({ message: 'Kullanıcı bulunamadı' });
+        }
+        res.json(user);
+    } catch (error) {
+        console.error("GET /profile hatası:", error);
+        res.status(500).json({ message: 'Sunucu hatası' });
+    }
+});
+
 // --- PROFİL GÜNCELLEME (KRİTİK DÜZELTME BURADA YAPILDI) ---
 router.put('/profile', protect, async (req, res) => {
     try {
@@ -131,6 +148,12 @@ router.put('/profile', protect, async (req, res) => {
                 // Mongoose'a iç içe objenin değiştiğini bildir (Nested object güncelleme sorunu için)
                 user.markModified('companyInfo');
             }
+
+            // --- YENİ EKLENEN KISIM: Transkript Güncelleme ---
+            if (req.body.transcript) {
+                user.transcript = req.body.transcript;
+            }
+            // --------------------------------------------------
             // ----------------------------------
 
             const updatedUser = await user.save();

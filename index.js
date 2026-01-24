@@ -1,5 +1,6 @@
 const express = require('express');
 const dotenv = require('dotenv');
+dotenv.config();
 const cors = require('cors');
 const connectDB = require('./config/db');
 
@@ -11,7 +12,7 @@ const userRoutes = require('./routes/userRoutes');
 const contentRoutes = require('./routes/contentRoutes'); // Yeni content rotasını da ekle
 
 // Ayarları yükle ve DB'ye bağlan
-dotenv.config();
+// Ayarları yükle ve DB'ye bağlan
 connectDB();
 
 // --- ÖNCE UYGULAMAYI OLUŞTUR ---
@@ -32,6 +33,7 @@ app.use('/api/internships', internshipRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/content', contentRoutes); // Yeni content rotasını kullan
+app.use('/api/study-plan', require('./routes/studyPlanRoutes'));
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, console.log(`Sunucu ${PORT} portunda çalışıyor...`));
