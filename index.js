@@ -32,7 +32,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/internships', internshipRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/content', contentRoutes); // Yeni content rotasını kullan
+app.use('/api/content', contentRoutes);
+app.use('/api/messages', require('./routes/messageRoutes')); // Mesajlaşma rotası
 app.use('/api/study-plan', require('./routes/studyPlanRoutes'));
 
 const PORT = process.env.PORT || 5000;

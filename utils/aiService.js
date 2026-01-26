@@ -1,4 +1,4 @@
-const Groq = require("groq-sdk");
+const OpenAI = require("openai");
 
 // Fallback logic if no API key is provided
 const SIMULATED_DELAY = 1500;
@@ -31,35 +31,76 @@ const getMockContent = (topic) => {
     };
 };
 
+// --- HELPER: ROBUST JSON PARSER WITH RETRY ---
+const generateJsonWithRetry = async (openai, modelName, messages, maxRetries = 3) => {
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            if (attempt > 1) {
+                console.log(`[AI Retry] JSON parsing failed, retrying (${attempt}/${maxRetries})...`);
+            }
+
+            const completion = await openai.chat.completions.create({
+                model: modelName,
+                messages: messages,
+                response_format: { type: "json_object" }, // Enforce JSON mode
+            });
+
+            const text = completion.choices[0].message.content;
+
+            // 1. Basic Cleanup (Should be clean JSON from OpenAI usually)
+            let cleanedText = text.trim();
+
+            // 2. Try Parsing directly
+            try {
+                return JSON.parse(cleanedText);
+            } catch (parseError) {
+                throw new Error(`JSON Parse Error: ${parseError.message}`);
+            }
+
+        } catch (error) {
+            lastError = error;
+            console.error(`AI Attempt ${attempt} Failed:`, error.message);
+        }
+    }
+
+    throw lastError || new Error("AI Generation failed after max retries");
+};
+
+
 const aiService = {
     generateDailyContent: async (topic, weakSubjectMode) => {
         try {
-            const apiKey = process.env.GROQ_API_KEY ? process.env.GROQ_API_KEY.trim() : "";
-            if (!apiKey) throw new Error("No API Key configured");
+            const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
+            if (!apiKey || apiKey.startsWith("sk-proj")) {
+                // Note: sk-proj indicates a project usage, usually fine, but simple check.
+                // Actually we just check if it exists.
+            }
+            if (!apiKey) throw new Error("No OpenAI API Key configured");
 
-            const groq = new Groq({ apiKey });
+            const openai = new OpenAI({ apiKey: apiKey });
+            // Using gpt-4o-mini as requested alternative to gpt-5-mini
+            const modelName = "gpt-4o-mini";
 
-            const prompt = `
-                Sen uzman bir Denizcilik Eğitmenisin.
-                Konu: "${topic}"
-                Mod: ${weakSubjectMode ? "Detaylı ve açıklayıcı (Öğrenci bu konuda zayıf)" : "Standart özet"}.
-                
-                Görevin:
-                1. Bu konu hakkında Markdown formatında AKADEMİK, EĞİTİCİ ve SÜRÜKLEYİCİ bir ders notu yaz (En az 800 kelime).
+            const systemPrompt = `Sen uzman bir Denizcilik Eğitmenisin.
+                GÖREVİN:
+                1. Verilen konu hakkında Markdown formatında ÇOK DETAYLI, AKADEMİK ve KAPSAMLI bir ders notu yaz.
+                   - **HEDEF KELİME SAYISI:** EN AZ 1500 KELİME OLMALIDIR.
                    - **İTÜ Denizcilik Fakültesi** müfredat standartlarına tam uygun olsun.
                    - Bir denizcilik akademisi hocası gibi anlat.
                    - Gerçek hayattan denizcilik örnekleri (vaka analizleri) ver.
                    - Karmaşık terimleri basit analojilerle açıkla.
                    - Önemli kısımları **kalın** işaretle.
 
-                2. Konuyla ilgili 20 adet YARATICI, ZORLAYICI ve SENARYO BAZLI çoktan seçmeli soru hazırla.
+                2. Konuyla ilgili TAM OLARAK 20 ADET (Daha az olamaz) YARATICI, ZORLAYICI ve SENARYO BAZLI çoktan seçmeli soru hazırla.
                    - KURALLAR:
                      - "options" listesinde 4 adet şık olsun.
                      - DOĞRU CEVABI (correctAnswer) ŞIKLAR ARASINDA RASTGELE DAĞIT (Hepsi A şıkkı OLMASIN, karıştır).
                      - "correctAnswer" alanı, "options" listesindeki doğru şıkkın TAM METNİ ile BİREBİR AYNI olmalıdır.
                      - Asla sadece A, B, C gibi harf yazma, cevabın kendisini yaz.
                 
-                Çıktı Formatı SADECE geçerli bir JSON olmalıdır. Başka yazı yazma.
+                Çıktı Formatı SADECE geçerli bir JSON olmalıdır.
                 JSON Formatı:
                 {
                     "content": "Markdown ders içeriği...",
@@ -69,29 +110,15 @@ const aiService = {
                 }
             `;
 
-            const chatCompletion = await groq.chat.completions.create({
-                messages: [
-                    { role: "user", content: prompt }
-                ],
-                model: "mixtral-8x7b-32768", // Current recommended model
-                temperature: 0.5,
-                response_format: { type: "json_object" }
-            });
+            const userPrompt = `Konu: "${topic}"
+            Mod: ${weakSubjectMode ? "Detaylı ve açıklayıcı (Öğrenci bu konuda zayıf)" : "Standart özet"}.`;
 
-            const text = chatCompletion.choices[0].message.content;
-            console.log("DEBUG: Daily Content Output:", text);
+            const messages = [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ];
 
-            try {
-                let cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-                return JSON.parse(cleanedText);
-            } catch (e) {
-                // Regex fallback
-                const jsonMatch = text.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    return JSON.parse(jsonMatch[0]);
-                }
-                throw new Error("JSON Parse failed");
-            }
+            return await generateJsonWithRetry(openai, modelName, messages);
 
         } catch (error) {
             console.log("AI Generation Failed/Skipped (Using Mock):", error.message);
@@ -101,76 +128,66 @@ const aiService = {
 
     chatWithAi: async (message, context = "") => {
         try {
-            const apiKey = process.env.GROQ_API_KEY ? process.env.GROQ_API_KEY.trim() : "";
-            console.log("DEBUG: Using GROQ_API_KEY:", apiKey ? (apiKey.substring(0, 5) + "...") : "MISSING");
+            const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
+            // console.log("DEBUG: Using OPENAI_API_KEY:", apiKey ? (apiKey.substring(0, 5) + "...") : "MISSING");
 
-            if (!apiKey) throw new Error("No API Key configured");
+            if (!apiKey) throw new Error("No OpenAI API Key configured");
 
-            const groq = new Groq({ apiKey });
+            const openai = new OpenAI({ apiKey: apiKey });
+            const modelName = "gpt-4o-mini";
 
-            const chatCompletion = await groq.chat.completions.create({
+            const systemInstruction = `Sen 'Kaptan AI' adında yardımsever, bilge ve profesyonel bir denizcilik asistanısın.
+            
+            GÖREVİN:
+            1. Sen bir 'Platform Asistanı'sın.
+            2. SADECE sana verilen "SİTE BİLGİLERİ" içindeki verilere dayanarak cevap ver.
+            3. Site dışı genel bilgiler sorma veya cevaplama (örn: hava durumu, maç sonucu vb. bilmem de).
+            4. Eğer bir ŞİRKET sana soruyorsa, öğrenci listesinden uygun kriterdeki öğrencileri bul ve getir.
+            5. Eğer bir ÖĞRENCİ soruyorsa, profilindeki notlara ve hedeflediği şirketlere göre tavsiye ver.
+            6. İlanları önerirken: "İlan Adı [İlana Git](/internships/ILAN_ID)" formatını kullan. BURADA 'ILAN_ID' YAZAN YERE, SANA VERİLEN "(ID: ...)" BİLGİSİNDEKİ GERÇEK ID'Yİ KOYMALISIN. ASLA "ILAN_ID" YAZIP BIRAKMA.
+            7. İçerik veya Duyuru önerirken: "Başlık [İçeriği Gör](/learning/ICERIK_ID)" formatını kullan.
+            8. Linkleri asla yeni satıra koyma, ilgili cümlenin akışına doğal şekilde göm.
+            9. Asla 'Duyuru]' veya '[Duyuru' gibi bozuk parantez kullanma. Formatın temiz olsun.
+            10. FORMAT KURALI: ASLA (**) gibi Markdown işaretleri kullanma (kalın, italik yapma). Sadece düz metin kullan. Listeleme yaparken her maddeyi yeni satıra (-) işareti ile yaz. Çıktın temiz ve dikey bir liste şeklinde olsun.`;
+
+            const completion = await openai.chat.completions.create({
+                model: modelName,
                 messages: [
-                    {
-                        role: "system",
-                        content: `Sen 'Kaptan AI' adında yardımsever, bilge ve profesyonel bir denizcilik asistanısın.
-                        
-                        GÖREVİN:
-                        1. Sen bir 'Platform Asistanı'sın.
-                        2. SADECE sana verilen "SİTE BİLGİLERİ" içindeki verilere dayanarak cevap ver.
-                        3. Site dışı genel bilgiler sorma veya cevaplama (örn: hava durumu, maç sonucu vb. bilmem de).
-                        4. Eğer bir ŞİRKET sana soruyorsa, öğrenci listesinden uygun kriterdeki öğrencileri bul ve getir.
-                        5. Eğer bir ÖĞRENCİ soruyorsa, profilindeki notlara ve hedeflediği şirketlere göre tavsiye ver.
-                        6. İlanları önerirken: "İlan Adı [İlana Git](/internships/ILAN_ID)" formatını kullanarak butonu satırın sonuna ekle.
-                        7. Öğrencileri önerirken: "Öğrenci Adı [Profili Gör](/profile/OGRENCI_ID)" formatını kullanarak butonu ismin hemen yanına ekle.
-                        8. Linkleri asla yeni satıra koyma, ilgili maddenin içine göm.
-                        
-                        ${context ? context : "(Veri yok)"}`
-                    },
-                    { role: "user", content: message }
+                    { role: "system", content: systemInstruction },
+                    { role: "user", content: `SİTE BİLGİLERİ:\n${context ? context : "(Veri yok)"}\n\nKullanıcı Sorusu: ${message}` }
                 ],
-                model: "mixtral-8x7b-32768",
-                temperature: 0.7,
             });
 
-            return chatCompletion.choices[0].message.content;
+            return completion.choices[0].message.content;
 
         } catch (error) {
             console.error("DEBUG: Chat Error Details:", error.message);
-            return `(HATA: ${error.message})\n\nGroq API ile bağlantı kurulamadı.`;
+            return `(HATA: ${error.message})\n\nOpenAI API ile bağlantı kurulamadı.`;
         }
     },
 
     generateStudyCurriculum: async (studentProfile, targetCompanyInfo) => {
         try {
-            const apiKey = process.env.GROQ_API_KEY ? process.env.GROQ_API_KEY.trim() : "";
-            if (!apiKey) throw new Error("No API Key configured");
+            const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
+            if (!apiKey) throw new Error("No OpenAI API Key configured");
 
-            const groq = new Groq({ apiKey });
+            const openai = new OpenAI({ apiKey: apiKey });
+            const modelName = "gpt-4o-mini";
 
-            const prompt = `
-                Sen uzman bir Denizcilik Kariyer Danışmanısın.
-                
-                Öğrenci Profili:
-                - Genel Ortalaması (GPA): ${studentProfile.gpa}
-                - İngilizce Seviyesi: ${studentProfile.englishLevel}
-                - Zayıf Olduğu Dersler (Transkript Analizi): ${studentProfile.weakSubjects.join(", ") || "Belirgin bir zayıf ders yok"}
-                
-                Hedef Şirket Profili:
-                - Şirket Sektörü: ${targetCompanyInfo.sector || "Genel Denizcilik"}
-                - Şirket Hakkında: ${targetCompanyInfo.about || "Standart uluslararası denizcilik şirketi"}
-
+            const systemPrompt = `Sen uzman bir Denizcilik Kariyer Danışmanısın.
                 GÖREVİN:
-                Bu öğrencinin bu şirkete seçilebilmesi için 30 günlük (Gün 1'den Gün 30'a kadar SIRALI), kişiselleştirilmiş bir çalışma müfredatı hazırla.
+                Bir öğrencinin hedef şirkete seçilebilmesi için 60 günlük (Gün 1'den Gün 60'a kadar SIRALI), kişiselleştirilmiş bir çalışma müfredatı hazırla.
                 
                 KURALLAR:
                 1. Öğrencinin zayıf olduğu konulara ilk haftalarda ağırlık ver.
                 2. Şirketin sektörüne uygun teknik konular ekle (Örn: Tanker ise tanker operasyonları).
                 3. İngilizce seviyesi düşükse (B2 altı), her haftaya Denizcilik İngilizcesi ekle.
                 4. Kariyer ve mülakat hazırlığı konuları da ekle.
-                5. GÜNLER KESİNLİKLE 1'den 30'a KADAR SIRALI OLMALIDIR.
-                
+                5. GÜNLER KESİNLİKLE 1'den 60'a KADAR SIRALI OLMALIDIR.
+
                 ÇIKTI FORMATI:
-                Aşağıdaki gibi bir JSON OBJESİ olmalıdır (ROOT "curriculum" anahtarı olmalı):
+                SADECE geçerli bir JSON OBJESİ olmalıdır. 
+                Root "curriculum" anahtarı olmalı:
                 {
                     "curriculum": [
                         { "day": 1, "topic": "Konu Başlığı" },
@@ -180,60 +197,38 @@ const aiService = {
                 }
             `;
 
-            const chatCompletion = await groq.chat.completions.create({
-                messages: [
-                    { role: "user", content: prompt }
-                ],
-                model: "mixtral-8x7b-32768",
-                temperature: 0.4,
-                response_format: { type: "json_object" }
-            });
+            const userPrompt = `
+                Öğrenci Profili:
+                - Genel Ortalaması (GPA): ${studentProfile.gpa}
+                - İngilizce Seviyesi: ${studentProfile.englishLevel}
+                - Zayıf Olduğu Dersler (Transkript Analizi): ${studentProfile.weakSubjects.join(", ") || "Belirgin bir zayıf ders yok"}
+                
+                Hedef Şirket Profili:
+                - Şirket Sektörü: ${targetCompanyInfo.sector || "Genel Denizcilik"}
+                - Şirket Hakkında: ${targetCompanyInfo.about || "Standart uluslararası denizcilik şirketi"}
+            `;
 
-            const text = chatCompletion.choices[0].message.content;
-            console.log("DEBUG: Raw AI Curriculum Output:", text); // Log for debugging
+            const messages = [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ];
 
-            let result;
-            try {
-                // 1. Try simple clean of markdown
-                let cleanedText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-                result = JSON.parse(cleanedText);
-            } catch (e) {
-                // 2. Try to regex extract the first array [...]
-                try {
-                    const arrayMatch = text.match(/\[\s*\{[\s\S]*\}\s*\]/);
-                    if (arrayMatch) {
-                        result = JSON.parse(arrayMatch[0]);
-                    } else {
-                        // 3. Try finding inside an object
-                        const objectMatch = text.match(/\{[\s\S]*\}/);
-                        if (objectMatch) {
-                            const obj = JSON.parse(objectMatch[0]);
-                            result = obj.curriculum || obj.days || obj.schedule || Object.values(obj).find(val => Array.isArray(val));
-                        }
-                    }
-                } catch (e2) {
-                    console.error("JSON Parsing Failed completely");
-                }
-            }
+            const resultJson = await generateJsonWithRetry(openai, modelName, messages);
 
             // Normalize result to array
-            if (!result) throw new Error("Could not parse JSON");
+            if (!resultJson) throw new Error("Could not parse JSON");
 
             let finalArray = [];
-            if (result.curriculum && Array.isArray(result.curriculum)) finalArray = result.curriculum;
-            else if (Array.isArray(result)) finalArray = result;
-            else if (result.days && Array.isArray(result.days)) finalArray = result.days;
-            else if (result.schedule && Array.isArray(result.schedule)) finalArray = result.schedule;
+            if (resultJson.curriculum && Array.isArray(resultJson.curriculum)) finalArray = resultJson.curriculum;
+            else if (Array.isArray(resultJson)) finalArray = resultJson;
             else {
-                // Ensure at least we have something if it's an object with keys "1", "2" etc.
-                const values = Object.values(result);
-                // Filter extracting only objects that look like days
-                const possibleDays = values.filter(v => v && typeof v === 'object' && v.topic);
-                if (possibleDays.length > 0) finalArray = possibleDays;
+                // Trying to find array in object values
+                const values = Object.values(resultJson);
+                const possibleArray = values.find(v => Array.isArray(v));
+                if (possibleArray) finalArray = possibleArray;
             }
 
             if (finalArray.length === 0) {
-                console.error("AI returned valid JSON but no array found:", result);
                 return [{ day: 1, topic: "Genel Denizcilik (AI Plan Ayrıştırılamadı - Lütfen Yeniden Deneyin)" }];
             }
 
@@ -242,7 +237,7 @@ const aiService = {
         } catch (error) {
             console.error("Curriculum Gen Error:", error.message);
             // Fallback
-            return Array.from({ length: 30 }, (_, i) => ({
+            return Array.from({ length: 60 }, (_, i) => ({
                 day: i + 1,
                 topic: `Denizcilik Eğitimi - Gün ${i + 1} (Yedek İçerik)`
             }));

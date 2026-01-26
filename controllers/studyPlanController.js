@@ -93,15 +93,18 @@ const checkAndCreatePlan = async (req, res) => {
 
         const studentEnglishScore = englishLevels[student.englishLevel] || 1;
 
-        // Check if plan is needed
+        // Check if plan is needed (Stats calculation kept for reference)
         const needsPlan = (student.gpa < avgGpa) || (studentEnglishScore < avgEnglishScore);
 
+        // Kural Değişikliği: Ortalaması yetse bile eksiklerini kapatması için plan oluşturuyoruz. (User Request)
+        /*
         if (!needsPlan) {
             return res.status(200).json({
                 message: 'Ortalamanız ve seviyeniz yeterli. Ekstra çalışma programına gerek yok.',
                 needsPlan: false
             });
         }
+        */
 
         // Check if plan already exists
         const existingPlan = await StudyPlan.findOne({ student: student._id, isActive: true });
@@ -127,7 +130,7 @@ const checkAndCreatePlan = async (req, res) => {
 
         console.log("Belirlenen zayıf dersler:", weakSubjects);
 
-        console.log("Belirlenen zayıf dersler:", weakSubjects);
+
 
         // 4. AI-Based Curriculum Generation
         const aiService = require('../utils/aiService');
@@ -226,27 +229,38 @@ const submitDayResult = async (req, res) => {
 
         const gainedXp = correctCount * 5; // 5 XP per correct answer. Max 100 XP/day.
 
-        module.isCompleted = true;
-        module.score = correctCount;
+        // Optimistic update with findOneAndUpdate to avoid VersionError
+        await StudyPlan.findOneAndUpdate(
+            { _id: planId, "modules.dayNumber": dayNumber },
+            {
+                $set: {
+                    "modules.$.isCompleted": true,
+                    "modules.$.score": correctCount
+                }
+            }
+        );
 
-        // Unlock next day
-        // "konuyu bitirdikten 24 saat sonra diğer konu açılabilecek"
-        // Unlock next day logic removed as per request (all days open)
-        /*
-        const nextModuleIndex = moduleIndex + 1;
-        if (nextModuleIndex < plan.modules.length) {
-            // ... unlock logic retained in comments if needed later
+        // Update User XP atomically to prevent race conditions
+        const updatedUser = await User.findByIdAndUpdate(
+            req.user._id,
+            {
+                $inc: { xp: gainedXp },
+                // Recalculate level based on new XP (approximate level)
+                // Note: MongoDB doesn't support calculated fields in update easily without aggregation pipeline.
+                // For atomic simplicity, we'll increment XP here. Level can be calculated on read or separate hook.
+                // However, if we want to store level:
+            },
+            { new: true }
+        );
+
+        // Simple Level Update (If critical, can be done in pre-save hook or separate atomic set if logic allows)
+        // For now, let's just trust XP is source of truth.
+        if (updatedUser) {
+            const newLevel = Math.floor(updatedUser.xp / 1000) + 1;
+            if (updatedUser.level !== newLevel) {
+                await User.findByIdAndUpdate(req.user._id, { level: newLevel });
+            }
         }
-        */
-
-        await plan.save();
-
-        // Update User XP
-        const user = await User.findById(req.user._id);
-        user.xp += gainedXp;
-        // Level calc: e.g., every 1000 XP is a level
-        user.level = Math.floor(user.xp / 1000) + 1;
-        await user.save();
 
         res.json({ message: 'Tebrikler! Gün tamamlandı.', gainedXp, totalXp: user.xp });
 
@@ -263,8 +277,10 @@ const archiveCurrentPlan = async (req, res) => {
     try {
         const plan = await StudyPlan.findOne({ student: req.user._id, isActive: true });
         if (plan) {
-            plan.isActive = false; // "Archive" it
-            await plan.save();
+            await StudyPlan.findOneAndUpdate(
+                { _id: plan._id },
+                { isActive: false }
+            );
             res.json({ message: 'Plan arşivlendi.' });
         } else {
             res.status(404).json({ message: 'Aktif plan yok.' });
@@ -327,12 +343,22 @@ const getContentForDay = async (req, res) => {
 
             const aiResult = await aiService.generateDailyContent(module.topic, isWeak);
 
+            // Optimistic update with findOneAndUpdate to avoid VersionError
+            await StudyPlan.findOneAndUpdate(
+                { _id: planId, "modules.dayNumber": dayNumber },
+                {
+                    $set: {
+                        "modules.$.lectureContent": aiResult.content,
+                        "modules.$.questions": (aiResult.questions && aiResult.questions.length > 0) ? aiResult.questions : []
+                    }
+                }
+            );
+
+            // Update local object specifically for the response
             module.lectureContent = aiResult.content;
             if (aiResult.questions && aiResult.questions.length > 0) {
                 module.questions = aiResult.questions;
             }
-
-            await plan.save();
         }
 
         res.json(module);
@@ -350,53 +376,101 @@ const chatWithAi = async (req, res) => {
         const user = await User.findById(req.user._id);
 
         // 2. Format Context String based on Role
-        let context = "SİTE BİLGİLERİ (SADECE BURADAKİ BİLGİLERE GÖRE CEVAP VER, HARİCİ BİLGİ KULLANMA):\n";
+        let context = `SİTE BİLGİLERİ (SADECE BURADAKİ BİLGİLERE GÖRE CEVAP VER, HARİCİ BİLGİ KULLANMA):\n`;
+        context += `Aktif Kullanıcı: ${user.name} ${user.surname || ''} (${user.role})\n\n`;
+
+        // --- GLOBAL DATA (Herkese Açık) ---
+        // 0. Sınav/Skor Sıralaması (Top 5)
+        // --- GLOBAL DATA (Herkese Açık) ---
+        // 0. Sınav/Skor Sıralaması (Top 5)
+        // DÜZELTME: Doğrudan successScore alanına göre sıralıyoruz. Manuel hesaplama YAPMIYORUZ.
+        const topStudents = await User.find({ role: 'student' })
+            .select('name surname gpa englishLevel xp successScore _id')
+            .sort({ successScore: -1 })
+            .limit(5);
+
+        context += "--- EN YÜKSEK SKORLU ÖĞRENCİLER (GENEL SIRALAMA) ---\n";
+        context += "NOT: Aşağıdaki 'Başarı Skoru' veritabanından gelen kesin değerdir. Lütfen bu değeri kullanın, kendiniz hesaplama yapmayın.\n";
+
+        topStudents.forEach((s, idx) => {
+            const score = s.successScore !== undefined ? s.successScore : 0;
+            context += `${idx + 1}. ${s.name} ${s.surname} [Profili Gör](/profile/${s._id}) - Başarı Skoru: ${score} (GPA: ${s.gpa}, İng: ${s.englishLevel})\n`;
+        });
+        context += "\n";
+
+        // 1. Duyurular/İçerikler
+        const Content = require('../models/Content');
+        const contents = await Content.find({}).populate('author', 'name title').sort({ createdAt: -1 }).limit(20);
+        if (contents.length > 0) {
+            context += "--- SON DUYURULAR VE İÇERİKLER ---\n";
+            contents.forEach(c => {
+                const authorName = c.author ? c.author.name : "Admin";
+                // Format: TÜR: BAŞLIK (Yazar: AD) (İçeriği Gör Linki)
+                context += `${c.type}: "${c.title}" (Yazar: ${authorName}) [İçeriği Gör](/learning/${c._id}) - Özet: ${c.content.substring(0, 100)}...\n`;
+            });
+            context += "\n";
+        }
 
         if (user.role === 'company') {
-            // --- COMPANY CONTEXT: List Students ---
-            const students = await User.find({ role: 'student' })
-                .select('name surname department gpa englishLevel xp currentStatus');
-
-            context += "--- ÖĞRENCİ HAVUZU (ADAYLAR) ---\n";
-            if (students.length > 0) {
-                students.forEach(s => {
-                    context += `- Öğrenci: ${s.name} ${s.surname || ''} | ID: ${s._id} | Bölüm: ${s.department} | Ortalaması (GPA): ${s.gpa} | İngilizce: ${s.englishLevel} | Durum: ${s.currentStatus}\n`;
+            // --- COMPANY CONTEXT ---
+            // 1. Kendi İlanları
+            const myInternships = await Internship.find({ company: user._id });
+            context += "--- ŞİRKETİN PAYLAŞTIĞI İLANLAR ---\n";
+            if (myInternships.length > 0) {
+                myInternships.forEach(i => {
+                    context += `- İlan: "${i.title}" | Durum: ${i.isActive ? 'Aktif' : 'Pasif'} | Başvuru Sayısı: ${i.applicants.length}\n`;
                 });
             } else {
-                context += "(Kayıtlı öğrenci yok)\n";
+                context += "(Henüz ilan paylaşılmamış)\n";
             }
-            context += "\n(Şirket yetkilisi olarak bu öğrencileri filtreleyebilir, uygun adayları sorabilirsin.)\n";
+
+            // 2. Öğrenci Havuzu (Tam Yetki)
+            const students = await User.find({ role: 'student' })
+                .select('name surname department gpa englishLevel xp currentStatus transcript');
+
+            context += "\n--- ÖĞRENCİ HAVUZU (ADAYLAR) ---\n";
+            if (students.length > 0) {
+                students.forEach(s => {
+                    // Transkript özet
+                    const weakLessons = s.transcript ? s.transcript.filter(t => ['FF', 'VF', 'DD', 'DC'].includes(t.grade)).map(t => t.courseName).join(', ') : '';
+                    context += `- ${s.name} ${s.surname} [Profili Gör](/profile/${s._id}): Bölüm: ${s.department} | Ort: ${s.gpa} | İng: ${s.englishLevel} | Durum: ${s.currentStatus} | Zayıf Dersler: ${weakLessons || 'Yok'}\n`;
+                });
+            }
+
+        } else if (user.role === 'lecturer') {
+            // --- LECTURER CONTEXT ---
+            // 1. Tüm Öğrenciler ve Detayları
+            const students = await User.find({ role: 'student' });
+            context += "--- TÜM ÖĞRENCİLERİN DURUMU ---\n";
+            for (const s of students) {
+                const plan = await StudyPlan.findOne({ student: s._id, isActive: true });
+                const planStatus = plan ? `(Planı Var: Gün ${plan.modules.filter(m => m.isCompleted).length}/60)` : '(Planı Yok)';
+                context += `- ${s.name} ${s.surname} [Profili Gör](/profile/${s._id}): Ort: ${s.gpa} | İng: ${s.englishLevel} | XP: ${s.xp} | ${planStatus}\n`;
+            }
 
         } else {
-            // --- STUDENT CONTEXT: List Internships & Companies ---
-            // Get active internships
+            // --- STUDENT CONTEXT ---
+            // 1. Aktif Staj İlanları
             const internships = await Internship.find({ isActive: true })
                 .populate('company', 'name companyInfo')
                 .select('title shipType location duration department company');
 
-            // Get companies
-            const companies = await User.find({ role: 'company' })
-                .select('name companyInfo');
+            // 2. Kayıtlı Şirketler
+            const companies = await User.find({ role: 'company' }).select('name companyInfo');
 
             context += "--- AKTİF STAJ İLANLARI ---\n";
-            if (internships.length > 0) {
-                internships.forEach(i => {
-                    const compName = i.company?.name || "Bilinmeyen Şirket";
-                    context += `- İlan: "${i.title}" | ID: ${i._id} | Şirket: ${compName} | Gemi: ${i.shipType} | Yer: ${i.location} | Süre: ${i.duration}\n`;
-                });
-            } else {
-                context += "(Şu an aktif ilan yok)\n";
-            }
+            internships.forEach(i => {
+                const compName = i.company?.name || "Bilinmeyen Şirket";
+                context += `- İlan: "${i.title}" (ID: ${i._id}) | Şirket: ${compName} | Gemi: ${i.shipType} | Yer: ${i.location}\n`;
+            });
 
-            context += "\n--- KAYITLI ŞİRKETLER ---\n";
-            if (companies.length > 0) {
-                companies.forEach(c => {
-                    const sector = c.companyInfo?.sector || "Belirtilmemiş";
-                    context += `- Şirket: ${c.name} | Sektör: ${sector}\n`;
-                });
-            } else {
-                context += "(Kayıtlı şirket yok)\n";
-            }
+            context += "\n--- ŞİRKETLER ---\n";
+            companies.forEach(c => {
+                context += `- ${c.name} (${c.companyInfo?.sector || 'Sektör Belirtilmemiş'})\n`;
+            });
+
+            // ÖĞRENCİ BAŞKA ÖĞRENCİYİ GÖREMEZ (Privacy)
+            context += "\n(Diğer öğrencilerin verilerine erişim yetkiniz yoktur.)\n";
         }
 
         // Add Current User Profile (For everyone)
