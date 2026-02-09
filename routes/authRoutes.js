@@ -10,11 +10,16 @@ const generateToken = (id) => {
     return jwt.sign({ id }, process.env.JWT_SECRET || 'gizli_anahtar', { expiresIn: '30d' });
 };
 
-// @desc    Kullanıcı Kaydı + PROFESYONEL DOĞRULAMA MAİLİ
+// @desc    Kullanıcı Kaydı + PROFESYONEL DOĞRULAMA MAİLİ + ADMIN ONAYI
 router.post('/register', async (req, res) => {
-    const { name, email, password, role, department, classYear } = req.body;
+    const { name, email, password, role, department, classYear, studentBarcode } = req.body;
 
     try {
+        // Barkod Kontrolü (Sadece öğrenciler için)
+        if (role === 'student' && !studentBarcode) {
+            return res.status(400).json({ message: 'Öğrenci kaydı için E-Devlet barkod numarası zorunludur.' });
+        }
+
         const userExists = await User.findOne({ email });
         if (userExists) {
             return res.status(400).json({ message: 'Bu e-posta adresi zaten kullanımda.' });
@@ -22,9 +27,14 @@ router.post('/register', async (req, res) => {
 
         const verificationToken = crypto.randomBytes(20).toString('hex');
 
+        // Admin ise otomatik onaylı olsun (İsteğe bağlı, şimdilik değil)
+        // const isApproved = role === 'admin' ? true : false;
+
         const user = await User.create({
-            name, email, password, role, department, classYear,
+            name, email, password, role, department, classYear, studentBarcode,
             isVerified: false,
+            // isApproved: false, // Default zaten false
+            // status: 'pending', // Default zaten pending
             verificationToken: verificationToken,
             currentStatus: 'Okulda/Tatilde'
         });
@@ -80,7 +90,7 @@ router.post('/register', async (req, res) => {
                     subject: 'Marine Cadet\'e Hoş Geldiniz! 🚢 Lütfen Hesabınızı Doğrulayın',
                     html: welcomeHtml // HTML tasarımını gönderiyoruz
                 });
-                res.status(201).json({ message: "Kayıt başarılı! Lütfen e-postanıza gelen doğrulama linkine tıklayın." });
+                res.status(201).json({ message: "Kayıt başarılı! Bilgileriniz admin onayına gönderilmiştir. Lütfen önce e-postanızı doğrulayın." });
             } catch (emailError) {
                 await User.findByIdAndDelete(user._id);
                 res.status(500).json({ message: "Mail gönderilemedi, kayıt işlemi başarısız oldu." });
@@ -103,6 +113,11 @@ router.post('/login', async (req, res) => {
                 return res.status(401).json({ message: "Lütfen önce e-posta adresinizi doğrulayın." });
             }
 
+            // ADMIN ONAY KONTROLÜ
+            if (!user.isApproved && user.role !== 'admin') { // Adminler kendine her zaman girebilsin (ilk kurulum içn) veya veritabanından ayarlanır
+                return res.status(403).json({ message: "Hesabınız henüz yönetici tarafından onaylanmamıştır." });
+            }
+
             res.json({
                 _id: user._id,
                 token: generateToken(user._id),
@@ -122,7 +137,8 @@ router.post('/login', async (req, res) => {
                 title: user.title,
                 office: user.office,
                 companyInfo: user.companyInfo,
-                preferences: user.preferences
+                preferences: user.preferences,
+                kvkkApproved: user.kvkkApproved // <-- KVKK ONAY DURUMU
             });
         } else {
             res.status(401).json({ message: 'Geçersiz e-posta veya şifre.' });
@@ -251,7 +267,7 @@ router.put('/profile/me', protect, async (req, res) => {
             if (req.body.companyInfo) user.companyInfo = { ...user.companyInfo, ...req.body.companyInfo };
             if (req.body.preferences) user.preferences = { ...user.preferences, ...req.body.preferences };
             const updatedUser = await user.save();
-            res.json({ ...updatedUser._doc, token: generateToken(updatedUser._id) });
+            res.json({ ...updatedUser._doc, token: generateToken(updatedUser._id), kvkkApproved: updatedUser.kvkkApproved });
         } else {
             res.status(404).json({ message: 'Kullanıcı bulunamadı.' });
         }

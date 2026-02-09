@@ -10,6 +10,32 @@ const Internship = require('../models/Internship');
 // --- HATA AYIKLAMA LOGU ---
 console.log("Internship Modeli Yüklendi:", Internship ? "EVET" : "HAYIR");
 
+// @desc    KVKK Metnini Onayla
+router.post('/approve-kvkk', protect, async (req, res) => {
+    try {
+        if (!req.user || !req.user._id) {
+            console.error("KVKK Onay Hatası: req.user yok!");
+            return res.status(401).json({ message: "Yetkisiz erişim." });
+        }
+
+        const user = await User.findById(req.user._id);
+        if (!user) return res.status(404).json({ message: "Kullanıcı bulunamadı." });
+
+        user.kvkkApproved = true;
+        user.kvkkApprovalDate = new Date();
+        user.kvkkVersion = req.body.version || "1.0.0";
+        // IP Adresi alma (Proxy arkasında olabilir)
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || null;
+        user.kvkkIpAddress = ip;
+
+        await user.save();
+        res.json({ message: "KVKK onayı başarıyla alındı.", kvkkApproved: true });
+    } catch (error) {
+        console.error("KVKK Onay Hatası (Stack):", error);
+        res.status(500).json({ message: "Sunucu hatası: " + error.message });
+    }
+});
+
 // @desc    Giriş yapmış öğrencinin başvurularını getir
 router.get('/my-applications', protect, async (req, res) => {
     try {
@@ -32,9 +58,22 @@ router.get('/my-applications', protect, async (req, res) => {
             if (i._id) internshipMap[i._id.toString()] = i;
         });
 
+        console.log("Kullanıcı Başvuruları:", applications);
+        console.log("Bulunan İlanlar:", internships);
+
+
         const results = applications.map(app => {
             if (!app.internship) return null;
-            const details = internshipMap[app.internship.toString()];
+
+            // app.internship bazen obje (populated) bazen string (ObjectId) olabilir
+            let internshipId = app.internship;
+            if (typeof internshipId === 'object' && internshipId._id) {
+                internshipId = internshipId._id.toString();
+            } else {
+                internshipId = internshipId.toString();
+            }
+
+            const details = internshipMap[internshipId];
 
             if (!details) {
                 return {
@@ -259,8 +298,15 @@ router.get('/stats/company', protect, async (req, res) => {
         let totalApplicants = 0;
         let gpaSum = 0;
         let gpaCount = 0;
-        let classDist = { 1: 0, 2: 0, 3: 0, 4: 0, other: 0 };
-        let recentApplicants = [];
+
+        // Bölüm bazlı dağılımlar
+        let deckDist = { 1: 0, 2: 0, 3: 0, 4: 0, other: 0 };
+        let engineDist = { 1: 0, 2: 0, 3: 0, 4: 0, other: 0 };
+
+        // Bölüm bazlı son başvurular
+        let deckApplicants = [];
+        let engineApplicants = [];
+
         const engLevels = { 'A1': 1, 'A2': 2, 'B1': 3, 'B2': 4, 'C1': 5, 'C2': 6 };
         let engSum = 0;
         let engCount = 0;
@@ -270,31 +316,63 @@ router.get('/stats/company', protect, async (req, res) => {
             totalApplicants += ad.applicants.length;
             ad.applicants.forEach(app => {
                 const stu = app.user;
-                if (stu) {
-                    recentApplicants.push({
-                        _id: stu._id,
-                        name: stu.name,
-                        surname: stu.surname,
-                        internshipTitle: ad.title,
-                        createdAt: app.createdAt
-                    });
-                    if (stu.gpa) {
-                        gpaSum += Number(stu.gpa);
-                        gpaCount++;
+                if (!stu) return;
+
+                const dept = (stu.department || "").toLowerCase();
+                const isEngine = dept.includes('makine') || dept.includes('engine') || dept.includes('gemi makineleri');
+
+                // Tarih Belirleme (Fallback Logic)
+                let finalDate = app.createdAt;
+                if (!finalDate) {
+                    // Timestamp'i ID'den çekmeye çalış
+                    if (app._id && typeof app._id.getTimestamp === 'function') {
+                        finalDate = app._id.getTimestamp();
+                    } else {
+                        finalDate = new Date(); // En kötü ihtimalle şu an
                     }
-                    if (stu.englishLevel && engLevels[stu.englishLevel]) {
-                        engSum += engLevels[stu.englishLevel];
-                        engCount++;
-                    }
-                    const match = String(stu.classYear).match(/\d+/);
-                    if (match) {
-                        const year = parseInt(match[0]);
-                        if (year >= 1 && year <= 4) classDist[year]++;
-                        else classDist.other++;
-                    }
+                }
+
+                // Öğrenci bilgisi objesi
+                const applicantObj = {
+                    _id: stu._id,
+                    name: stu.name,
+                    surname: stu.surname,
+                    internshipTitle: ad.title,
+                    createdAt: finalDate
+                };
+
+                // KAPSAYICI MANTIK: Makine değilse -> Güverte (Varsayılan)
+                if (isEngine) {
+                    engineApplicants.push(applicantObj);
+                } else {
+                    deckApplicants.push(applicantObj);
+                }
+
+                // GPA ve İngilizce Ortalaması (Genel)
+                if (stu.gpa) {
+                    gpaSum += Number(stu.gpa);
+                    gpaCount++;
+                }
+                if (stu.englishLevel && engLevels[stu.englishLevel]) {
+                    engSum += engLevels[stu.englishLevel];
+                    engCount++;
+                }
+
+                // Sınıf Dağılımı (Bölüme göre)
+                const match = String(stu.classYear).match(/\d+/);
+                if (match) {
+                    const year = parseInt(match[0]);
+                    const targetDist = isEngine ? engineDist : deckDist; // Default Deck
+
+                    if (year >= 1 && year <= 4) targetDist[year]++;
+                    else targetDist.other++;
                 }
             });
         });
+
+        // Tarihe göre yeniden eskiye sırala
+        deckApplicants.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        engineApplicants.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
         const avgGpa = gpaCount > 0 ? (gpaSum / gpaCount).toFixed(2) : "0.00";
         const avgEngScore = engCount > 0 ? engSum / engCount : 0;
@@ -318,8 +396,14 @@ router.get('/stats/company', protect, async (req, res) => {
             avgGpa,
             avgEngScore,
             avgEngLabel,
-            classDistribution: classDist,
-            recentApplicants: recentApplicants.slice(0, 5),
+            classDistribution: { // Frontend uyumu için eski yapıyı koru, yenileri ekle
+                deck: deckDist,
+                engine: engineDist
+            },
+            recentApplicants: { // Frontend uyumu için obje döndür
+                deck: deckApplicants.slice(0, 5),
+                engine: engineApplicants.slice(0, 5)
+            },
             interestedCount,
             interestedStudents,
             totalStudentCount
@@ -368,18 +452,16 @@ router.get('/stats/lecturer', protect, async (req, res) => {
                 c.count++;
 
                 const dept = (stu.department || "").toLowerCase();
+                const isEngine = dept.includes('makine') || dept.includes('engine') || dept.includes('gemi makineleri');
 
-                // Güverte Kontrolü
-                if (dept.includes('güverte') || dept.includes('deck') || dept.includes('deniz ulaştırma')) {
+                if (isEngine) {
+                    c.engine++;
+                    engineTotal++;
+                } else {
+                    // Kapsayıcı Mantık: Makine değilse varsayılan olarak Güverte kabul et
                     c.deck++;
                     deckTotal++;
                 }
-                // Makine Kontrolü (Artık else değil, explicit check)
-                else if (dept.includes('makine') || dept.includes('engine') || dept.includes('gemi makineleri')) {
-                    c.engine++;
-                    engineTotal++;
-                }
-                // Diğer durumlarda (Bölüm girilmemişse vs.) hiçbirine ekleme yapmıyoruz.
 
                 if (stu.gpa) {
                     c.gpaSum += Number(stu.gpa);

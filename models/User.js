@@ -12,7 +12,7 @@ const userSchema = mongoose.Schema({
     surname: { type: String }, // <-- BU SATIRI EKLE
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    role: { type: String, required: true, enum: ['student', 'company', 'lecturer'] },
+    role: { type: String, required: true, enum: ['student', 'company', 'lecturer', 'admin'] },
     isVerified: { type: Boolean, default: false },
     verificationToken: { type: String },
 
@@ -64,15 +64,30 @@ const userSchema = mongoose.Schema({
         about: { type: String },
         address: { type: String },
         website: { type: String },
-        sector: { type: String }  // <-- BU SATIR MUTLAKA OLMALI!
-    }
+        sector: { type: String },  // <-- BU SATIR MUTLAKA OLMALI!
+    },
+
+    // --- ADMIN ONAY VE DOĞRULAMA SİSTEMİ ---
+    studentBarcode: { type: String, required: false }, // Register'da zorunlu olacak
+    isApproved: { type: Boolean, default: false },
+    status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending'
+    },
+
+    // --- KVKK Onay Alanları ---
+    kvkkApproved: { type: Boolean, default: false },
+    kvkkApprovalDate: { type: Date },
+    kvkkVersion: { type: String, default: "1.0.0" },
+    kvkkIpAddress: { type: String }
 
 }, { timestamps: true });
 
 // Parolayı kaydetmeden önce şifrele
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function () {
     if (!this.isModified('password')) {
-        next();
+        return;
     }
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);

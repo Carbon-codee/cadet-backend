@@ -102,10 +102,12 @@ router.post('/:id/apply', protect, isStudent, async (req, res) => {
         if (alreadyApplied) return res.status(400).json({ message: 'Zaten başvurdunuz.' });
 
         internship.applicants.push({ user: req.user._id, status: 'Beklemede' });
-        student.applications.push({ internship: req.params.id, status: 'Beklemede' });
-
         await internship.save();
-        await student.save();
+
+        // student.save() yerine updateOne/findByIdAndUpdate daha güvenli
+        await User.findByIdAndUpdate(req.user._id, {
+            $push: { applications: { internship: req.params.id, status: 'Beklemede' } }
+        });
 
         res.status(200).json({ message: 'Başvuru başarılı.' });
     } catch (error) {

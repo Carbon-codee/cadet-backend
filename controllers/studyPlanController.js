@@ -372,124 +372,155 @@ const getContentForDay = async (req, res) => {
 const chatWithAi = async (req, res) => {
     try {
         const { message } = req.body;
-
         const user = await User.findById(req.user._id);
-
-        // 2. Format Context String based on Role
-        let context = `SİTE BİLGİLERİ (SADECE BURADAKİ BİLGİLERE GÖRE CEVAP VER, HARİCİ BİLGİ KULLANMA):\n`;
-        context += `Aktif Kullanıcı: ${user.name} ${user.surname || ''} (${user.role})\n\n`;
-
-        // --- GLOBAL DATA (Herkese Açık) ---
-        // 0. Sınav/Skor Sıralaması (Top 5)
-        // --- GLOBAL DATA (Herkese Açık) ---
-        // 0. Sınav/Skor Sıralaması (Top 5)
-        // DÜZELTME: Doğrudan successScore alanına göre sıralıyoruz. Manuel hesaplama YAPMIYORUZ.
-        const topStudents = await User.find({ role: 'student' })
-            .select('name surname gpa englishLevel xp successScore _id')
-            .sort({ successScore: -1 })
-            .limit(5);
-
-        context += "--- EN YÜKSEK SKORLU ÖĞRENCİLER (GENEL SIRALAMA) ---\n";
-        context += "NOT: Aşağıdaki 'Başarı Skoru' veritabanından gelen kesin değerdir. Lütfen bu değeri kullanın, kendiniz hesaplama yapmayın.\n";
-
-        topStudents.forEach((s, idx) => {
-            const score = s.successScore !== undefined ? s.successScore : 0;
-            context += `${idx + 1}. ${s.name} ${s.surname} [Profili Gör](/profile/${s._id}) - Başarı Skoru: ${score} (GPA: ${s.gpa}, İng: ${s.englishLevel})\n`;
-        });
-        context += "\n";
-
-        // 1. Duyurular/İçerikler
-        const Content = require('../models/Content');
-        const contents = await Content.find({}).populate('author', 'name title').sort({ createdAt: -1 }).limit(20);
-        if (contents.length > 0) {
-            context += "--- SON DUYURULAR VE İÇERİKLER ---\n";
-            contents.forEach(c => {
-                const authorName = c.author ? c.author.name : "Admin";
-                // Format: TÜR: BAŞLIK (Yazar: AD) (İçeriği Gör Linki)
-                context += `${c.type}: "${c.title}" (Yazar: ${authorName}) [İçeriği Gör](/learning/${c._id}) - Özet: ${c.content.substring(0, 100)}...\n`;
-            });
-            context += "\n";
-        }
-
-        if (user.role === 'company') {
-            // --- COMPANY CONTEXT ---
-            // 1. Kendi İlanları
-            const myInternships = await Internship.find({ company: user._id });
-            context += "--- ŞİRKETİN PAYLAŞTIĞI İLANLAR ---\n";
-            if (myInternships.length > 0) {
-                myInternships.forEach(i => {
-                    context += `- İlan: "${i.title}" | Durum: ${i.isActive ? 'Aktif' : 'Pasif'} | Başvuru Sayısı: ${i.applicants.length}\n`;
-                });
-            } else {
-                context += "(Henüz ilan paylaşılmamış)\n";
-            }
-
-            // 2. Öğrenci Havuzu (Tam Yetki)
-            const students = await User.find({ role: 'student' })
-                .select('name surname department gpa englishLevel xp currentStatus transcript');
-
-            context += "\n--- ÖĞRENCİ HAVUZU (ADAYLAR) ---\n";
-            if (students.length > 0) {
-                students.forEach(s => {
-                    // Transkript özet
-                    const weakLessons = s.transcript ? s.transcript.filter(t => ['FF', 'VF', 'DD', 'DC'].includes(t.grade)).map(t => t.courseName).join(', ') : '';
-                    context += `- ${s.name} ${s.surname} [Profili Gör](/profile/${s._id}): Bölüm: ${s.department} | Ort: ${s.gpa} | İng: ${s.englishLevel} | Durum: ${s.currentStatus} | Zayıf Dersler: ${weakLessons || 'Yok'}\n`;
-                });
-            }
-
-        } else if (user.role === 'lecturer') {
-            // --- LECTURER CONTEXT ---
-            // 1. Tüm Öğrenciler ve Detayları
-            const students = await User.find({ role: 'student' });
-            context += "--- TÜM ÖĞRENCİLERİN DURUMU ---\n";
-            for (const s of students) {
-                const plan = await StudyPlan.findOne({ student: s._id, isActive: true });
-                const planStatus = plan ? `(Planı Var: Gün ${plan.modules.filter(m => m.isCompleted).length}/60)` : '(Planı Yok)';
-                context += `- ${s.name} ${s.surname} [Profili Gör](/profile/${s._id}): Ort: ${s.gpa} | İng: ${s.englishLevel} | XP: ${s.xp} | ${planStatus}\n`;
-            }
-
-        } else {
-            // --- STUDENT CONTEXT ---
-            // 1. Aktif Staj İlanları
-            const internships = await Internship.find({ isActive: true })
-                .populate('company', 'name companyInfo')
-                .select('title shipType location duration department company');
-
-            // 2. Kayıtlı Şirketler
-            const companies = await User.find({ role: 'company' }).select('name companyInfo');
-
-            context += "--- AKTİF STAJ İLANLARI ---\n";
-            internships.forEach(i => {
-                const compName = i.company?.name || "Bilinmeyen Şirket";
-                context += `- İlan: "${i.title}" (ID: ${i._id}) | Şirket: ${compName} | Gemi: ${i.shipType} | Yer: ${i.location}\n`;
-            });
-
-            context += "\n--- ŞİRKETLER ---\n";
-            companies.forEach(c => {
-                context += `- ${c.name} (${c.companyInfo?.sector || 'Sektör Belirtilmemiş'})\n`;
-            });
-
-            // ÖĞRENCİ BAŞKA ÖĞRENCİYİ GÖREMEZ (Privacy)
-            context += "\n(Diğer öğrencilerin verilerine erişim yetkiniz yoktur.)\n";
-        }
-
-        // Add Current User Profile (For everyone)
-        if (user) {
-            context += "\n--- MEVCUT KULLANICI PROFİLİ ---\n";
-            context += `Rol: ${user.role}\n`;
-            context += `Ad Soyad: ${user.name} ${user.surname || ''}\n`;
-            if (user.role === 'student') {
-                context += `Bölüm: ${user.department}\nGPA: ${user.gpa}\nİngilizce: ${user.englishLevel}\n`;
-            } else if (user.role === 'company') {
-                context += `Şirket Adı: ${user.name}\nSektör: ${user.companyInfo?.sector}\n`;
-            }
-        }
-
-        console.log("AI Context Generated (Role: " + user.role + ")");
-
         const aiService = require('../utils/aiService');
-        const reply = await aiService.chatWithAi(message, context);
-        res.json({ reply });
+
+        // 1. Initial Context
+        let context = `KULLANICI: ${user.name} (${user.role})\n`;
+        // Minimal initial context to save tokens, let tools fetch details
+        if (user.role === 'student') context += `Bölüm: ${user.department}, Ort: ${user.gpa}\n`;
+        if (user.role === 'company') context += `Şirket: ${user.name}\n`;
+
+        // 2. First Call to AI
+        const aiMessage = await aiService.chatWithAi(message, context);
+
+        // 3. Handle Tool Calls
+        if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
+            const toolCall = aiMessage.tool_calls[0]; // Handle first tool call for simplicity
+            const fnName = toolCall.function.name;
+            const args = JSON.parse(toolCall.function.arguments);
+
+            console.log(`[AI Action] Tool: ${fnName}, Args:`, args);
+
+            // --- ACTION: NAVIGATION ---
+            if (fnName === 'nav_to') {
+                return res.json({
+                    reply: `İstediğiniz sayfaya yönlendiriyorum: ${args.path}`,
+                    action: { type: 'navigate', path: args.path }
+                });
+            }
+
+            // --- ACTION: DATA RETRIEVAL ---
+            let toolResult = "";
+
+            if (fnName === 'get_my_internships') {
+                if (user.role !== 'company') toolResult = "HATA: Bu işlemi sadece şirketler yapabilir.";
+                else {
+                    const internships = await Internship.find({ company: user._id });
+                    toolResult = JSON.stringify(internships.map(i => ({
+                        id: i._id, title: i.title, applicants: i.applicants ? i.applicants.length : 0, active: i.isActive
+                    })));
+                }
+            } else if (fnName === 'get_my_applications') {
+                if (user.role !== 'student') toolResult = "HATA: Bu işlemi sadece öğrenciler yapabilir.";
+                else {
+                    // Populate internship details
+                    const student = await User.findById(user._id).populate({
+                        path: 'applications.internship',
+                        select: 'title company',
+                        populate: { path: 'company', select: 'name' }
+                    });
+
+                    if (!student.applications || student.applications.length === 0) {
+                        toolResult = "Henüz hiç başvuru yapılmamış.";
+                    } else {
+                        // Map and sort by date (assuming we want latest first, but array push order is usually chronological. 
+                        // To get latest, we can reverse or rely on insertion order if no timestamp in subdoc)
+                        // Actually applications array items usually have _id which has timestamp.
+                        const apps = student.applications.map(a => {
+                            if (!a.internship) return { title: "Silinmiş İlan", status: a.status };
+                            return {
+                                title: a.internship.title,
+                                company: a.internship.company ? a.internship.company.name : "Bilinmiyor",
+                                status: a.status,
+                                id: a.internship._id
+                            };
+                        }).reverse(); // Show newest first
+                        toolResult = JSON.stringify(apps);
+                    }
+                }
+            } else if (fnName === 'get_applicants') {
+                if (user.role !== 'company') toolResult = "HATA: Yetkisiz işlem.";
+                else {
+                    const int = await Internship.findById(args.internshipId).populate('applicants.user', 'name surname gpa englishLevel');
+                    if (!int) toolResult = "İlan bulunamadı.";
+                    else {
+                        // Filter for this company
+                        if (int.company.toString() !== user._id.toString()) toolResult = "Bu ilan size ait değil.";
+                        else {
+                            let apps = int.applicants.map(a => ({
+                                name: `${a.user.name} ${a.user.surname}`,
+                                gpa: a.user.gpa,
+                                english: a.user.englishLevel,
+                                status: a.status
+                            }));
+                            // Sort logic
+                            if (args.sortBy === 'gpa') apps.sort((a, b) => b.gpa - a.gpa);
+                            toolResult = JSON.stringify(apps);
+                        }
+                    }
+                }
+            } else if (fnName === 'search_internships') {
+                const Internship = require('../models/Internship'); // Ensure Internship model is imported if not already
+                const results = await Internship.find({
+                    isActive: true,
+                    title: { $regex: args.query, $options: 'i' }
+                }).limit(5).select('title company location');
+                toolResult = JSON.stringify(results);
+            } else if (fnName === 'list_active_internships') {
+                const Internship = require('../models/Internship');
+                const results = await Internship.find({ isActive: true })
+                    .populate('company', 'name')
+                    .sort({ createdAt: -1 })
+                    .limit(10)
+                    .select('title company location shipType'); // Select commonly needed fields
+
+                if (results.length === 0) {
+                    toolResult = "Şu anda aktif staj ilanı bulunmamaktadır.";
+                } else {
+                    toolResult = JSON.stringify(results.map(r => ({
+                        id: r._id,
+                        title: r.title,
+                        company: r.company?.name || "Bilinmiyor",
+                        location: r.location,
+                        ship: r.shipType
+                    })));
+                }
+            } else if (fnName === 'get_top_students') {
+                const User = require('../models/User'); // Ensure User model is imported if not already
+                const students = await User.find({ role: 'student' })
+                    .sort({ successScore: -1 }) // or gpa
+                    .limit(5)
+                    .select('name surname gpa englishLevel successScore');
+                toolResult = JSON.stringify(students);
+            }
+
+            // 4. Second Call to AI (Summarize Tool Result)
+            // We can't easily pass the full history in this stateless setup without sending it all back and forth.
+            // But for this "Query -> Action -> Result" flow, we can just send the result as context.
+            const secondResponse = await aiService.chatWithAi(
+                `Kullanıcı isteği üzerine '${fnName}' fonksiyonu çalıştırıldı. Sonuçlar: ${toolResult}.\n\n` +
+                `GÖREVİN: Bu sonuçları kullanıcıya listele. ` +
+                `ÖNEMLİ KURAL: Her staj ilanı veya başvurusu için MUTLAKA şu formatta tıklanabilir link oluştur: "İlan Başlığı [Detayları Gör](/internships/ID)". ` +
+                `Eğer sonuçlarda ID varsa link oluşturmamak yasaktır.`,
+                context
+            );
+
+            // Handle edge case where second response might recursively call tools (avoid loop, just take content)
+            // Correction: aiService.chatWithAi returns MESSAGE OBJECT.
+            // We need to extract content.
+            let finalContent = "";
+            if (secondResponse.content) finalContent = secondResponse.content;
+            else if (typeof secondResponse === 'string') finalContent = secondResponse; // Mock fallback
+            else finalContent = "İşlem tamamlandı ancak yanıt oluşturulamadı.";
+
+            return res.json({ reply: finalContent });
+
+        }
+
+        // No tool called, just return content
+        res.json({ reply: aiMessage.content });
+
     } catch (error) {
         console.error("Chat Error:", error);
         res.status(500).json({ message: "Chat hatası" });

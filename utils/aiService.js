@@ -129,26 +129,102 @@ const aiService = {
     chatWithAi: async (message, context = "") => {
         try {
             const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
-            // console.log("DEBUG: Using OPENAI_API_KEY:", apiKey ? (apiKey.substring(0, 5) + "...") : "MISSING");
-
             if (!apiKey) throw new Error("No OpenAI API Key configured");
 
             const openai = new OpenAI({ apiKey: apiKey });
             const modelName = "gpt-4o-mini";
 
+            const tools = [
+                {
+                    type: "function",
+                    function: {
+                        name: "nav_to",
+                        description: "Kullanıcıyı uygulamanın içinde belirli bir sayfaya yönlendirir. Örneğin 'ilanlara git', 'profilime git' dendiğinde kullanılır.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                path: {
+                                    type: "string",
+                                    description: "Gidilecek URL yolu (Örn: '/internships', '/profile', '/company/my-internships')"
+                                }
+                            },
+                            required: ["path"]
+                        }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "get_my_internships",
+                        description: "Şirketin kendi oluşturduğu staj ilanlarını listeler.",
+                        parameters: { type: "object", properties: {} }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "get_my_applications",
+                        description: "Öğrencinin kendi yaptığı staj başvurularını listeler.",
+                        parameters: { type: "object", properties: {} }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "get_applicants",
+                        description: "Belirli bir staj ilanına başvuran öğrencileri getirir.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                internshipId: { type: "string", description: "İlanın veritabanı ID'si" },
+                                sortBy: { type: "string", enum: ["gpa", "english", "date"], description: "Sıralama kriteri" }
+                            },
+                            required: ["internshipId"]
+                        }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "search_internships",
+                        description: "Staj ilanlarında belirli bir kelimeye göre arama yapar.",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                query: { type: "string", description: "Aranacak kelime (pozisyon, şirket adı vs.)" }
+                            },
+                            required: ["query"]
+                        }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "list_active_internships",
+                        description: "Sistemdeki tüm aktif staj ilanlarını listeler. Kullanıcı genel olarak 'ilan var mı', 'stajları göster' dediğinde kullanılır.",
+                        parameters: { type: "object", properties: {} }
+                    }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "get_top_students",
+                        description: "Başarı puanı en yüksek öğrencileri listeler.",
+                        parameters: { type: "object", properties: {} }
+                    }
+                }
+            ];
+
             const systemInstruction = `Sen 'Kaptan AI' adında yardımsever, bilge ve profesyonel bir denizcilik asistanısın.
             
             GÖREVİN:
             1. Sen bir 'Platform Asistanı'sın.
-            2. SADECE sana verilen "SİTE BİLGİLERİ" içindeki verilere dayanarak cevap ver.
-            3. Site dışı genel bilgiler sorma veya cevaplama (örn: hava durumu, maç sonucu vb. bilmem de).
-            4. Eğer bir ŞİRKET sana soruyorsa, öğrenci listesinden uygun kriterdeki öğrencileri bul ve getir.
-            5. Eğer bir ÖĞRENCİ soruyorsa, profilindeki notlara ve hedeflediği şirketlere göre tavsiye ver.
-            6. İlanları önerirken: "İlan Adı [İlana Git](/internships/ILAN_ID)" formatını kullan. BURADA 'ILAN_ID' YAZAN YERE, SANA VERİLEN "(ID: ...)" BİLGİSİNDEKİ GERÇEK ID'Yİ KOYMALISIN. ASLA "ILAN_ID" YAZIP BIRAKMA.
-            7. İçerik veya Duyuru önerirken: "Başlık [İçeriği Gör](/learning/ICERIK_ID)" formatını kullan.
-            8. Linkleri asla yeni satıra koyma, ilgili cümlenin akışına doğal şekilde göm.
-            9. Asla 'Duyuru]' veya '[Duyuru' gibi bozuk parantez kullanma. Formatın temiz olsun.
-            10. FORMAT KURALI: ASLA (**) gibi Markdown işaretleri kullanma (kalın, italik yapma). Sadece düz metin kullan. Listeleme yaparken her maddeyi yeni satıra (-) işareti ile yaz. Çıktın temiz ve dikey bir liste şeklinde olsun.`;
+            2. Sana verilen "SİTE BİLGİLERİ"ni kullanabilirsin.
+            3. Site dışı genel bilgileri (hava durumu vs) cevaplama.
+            4. Eğer kullanıcının isteğini yerine getirmek için bir FONKSİYON (Tool) varsa, onu çağırmaktan çekinme.
+            5. Özellikle "git", "aç", "yönlendir" gibi komutlarda 'nav_to' fonksiyonunu kullan.
+            6. "Başvuruları göster", "adayları listele" gibi durumlarda ilgili veri fonksiyonunu kullan.
+            7. Normal cevap verirken Markdown kullan ve listeleri düzenli tut.`;
 
             const completion = await openai.chat.completions.create({
                 model: modelName,
@@ -156,13 +232,16 @@ const aiService = {
                     { role: "system", content: systemInstruction },
                     { role: "user", content: `SİTE BİLGİLERİ:\n${context ? context : "(Veri yok)"}\n\nKullanıcı Sorusu: ${message}` }
                 ],
+                tools: tools,
+                tool_choice: "auto",
             });
 
-            return completion.choices[0].message.content;
+            // Return the full message object (content + tool_calls)
+            return completion.choices[0].message;
 
         } catch (error) {
             console.error("DEBUG: Chat Error Details:", error.message);
-            return `(HATA: ${error.message})\n\nOpenAI API ile bağlantı kurulamadı.`;
+            return { content: `(HATA: ${error.message})\n\nOpenAI API ile bağlantı kurulamadı.` };
         }
     },
 

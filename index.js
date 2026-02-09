@@ -3,6 +3,8 @@ const dotenv = require('dotenv');
 dotenv.config();
 const cors = require('cors');
 const connectDB = require('./config/db');
+const helmet = require('helmet');
+const morgan = require('morgan'); // YENİ: Logger ekle
 
 // Rota dosyalarını import et
 const authRoutes = require('./routes/authRoutes');
@@ -33,6 +35,7 @@ app.use('/api/internships', internshipRoutes);
 app.use('/api/applications', applicationRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/content', contentRoutes);
+app.use('/api/admin', require('./routes/adminRoutes')); // YENİ: Admin Rotaları
 app.use('/api/messages', require('./routes/messageRoutes')); // Mesajlaşma rotası
 app.use('/api/study-plan', require('./routes/studyPlanRoutes'));
 

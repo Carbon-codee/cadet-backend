@@ -42,11 +42,20 @@ const isLecturer = (req, res, next) => {
     }
 };
 
+const isAdmin = (req, res, next) => {
+    if (req.user && req.user.role === 'admin') {
+        next();
+    } else {
+        res.status(401).json({ message: 'Sadece adminler bu işlemi yapabilir.' });
+    }
+};
+
 // --- EN KRİTİK KISIM BURASI ---
 // Tüm fonksiyonları doğru şekilde export ettiğinden emin ol
 module.exports = {
     protect,
     isCompany,
     isStudent,
-    isLecturer // 'isLecturer' burada olmalı
+    isLecturer,
+    isAdmin // 'isAdmin' eklendi
 };

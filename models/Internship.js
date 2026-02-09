@@ -12,7 +12,7 @@ const applicantSchema = mongoose.Schema({
         enum: ['Beklemede', 'İnceleniyor', 'Onaylandı', 'Reddedildi'],
         default: 'Beklemede'
     }
-});
+}, { timestamps: true });
 
 const internshipSchema = mongoose.Schema({
     company: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'User' },
