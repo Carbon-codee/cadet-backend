@@ -1,16 +1,45 @@
 const express = require('express');
 const router = express.Router();
 const Content = require('../models/Content');
+const Resource = require('../models/Resource');
 const { protect, isLecturer } = require('../middleware/authMiddleware');
 
-// @desc    Tüm içerikleri getir
+// @desc    Tüm içerikleri ve kaynakları getir (Birleştirilmiş)
 router.get('/', protect, async (req, res) => {
     try {
+        // 1. Content verilerini çek
         const contents = await Content.find({})
-            .populate('author', 'name title')
+            .populate('author', 'name title profilePicture department')
             .sort({ createdAt: -1 });
-        res.json(contents);
+
+        // 2. Resource verilerini çek
+        const resources = await Resource.find({})
+            .populate('instructor', 'name title profilePicture department')
+            .sort({ createdAt: -1 });
+
+        // 3. Resources'ları Content formatına dönüştür (unified format)
+        const transformedResources = resources.map(resource => ({
+            _id: resource._id,
+            title: resource.title,
+            content: resource.description || '',
+            type: resource.fileType === 'youtube' ? 'Video' : resource.fileType === 'pdf' ? 'Ders Notu' : 'Belge',
+            author: resource.instructor, // instructor field'i author olarak kullan
+            createdAt: resource.createdAt,
+            // Resource'a özgü alanlar
+            isResource: true,
+            youtubeUrl: resource.youtubeUrl,
+            fileUrl: resource.fileUrl,
+            fileType: resource.fileType
+        }));
+
+        // 4. İkisini birleştir ve tarihe göre sırala
+        const allItems = [...contents, ...transformedResources].sort((a, b) =>
+            new Date(b.createdAt) - new Date(a.createdAt)
+        );
+
+        res.json(allItems);
     } catch (error) {
+        console.error('İçerik yükleme hatası:', error);
         res.status(500).json({ message: 'İçerikler alınamadı.' });
     }
 });
@@ -35,7 +64,7 @@ router.post('/', protect, isLecturer, async (req, res) => {
 // @desc    Tek bir içeriği getir
 router.get('/:id', protect, async (req, res) => {
     try {
-        const content = await Content.findById(req.params.id).populate('author', 'name title');
+        const content = await Content.findById(req.params.id).populate('author', 'name title profilePicture department');
         if (content) {
             res.json(content);
         } else {

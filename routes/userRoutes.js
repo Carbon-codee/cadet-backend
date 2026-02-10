@@ -6,6 +6,8 @@ const { protect } = require('../middleware/authMiddleware');
 
 // Internship Modelini İçe Aktar
 const Internship = require('../models/Internship');
+const { upload, cloudinary } = require('../config/cloudinary');
+
 
 // --- HATA AYIKLAMA LOGU ---
 console.log("Internship Modeli Yüklendi:", Internship ? "EVET" : "HAYIR");
@@ -50,8 +52,8 @@ router.get('/my-applications', protect, async (req, res) => {
             .map(app => app.internship);
 
         const internships = await Internship.find({ '_id': { $in: internshipIds } })
-            .select('title company')
-            .populate('company', 'name');
+            .select('title company shipType location salary duration isActive createdAt')
+            .populate('company', 'name profilePicture');
 
         const internshipMap = {};
         internships.forEach(i => {
@@ -75,23 +77,10 @@ router.get('/my-applications', protect, async (req, res) => {
 
             const details = internshipMap[internshipId];
 
-            if (!details) {
-                return {
-                    _id: app._id,
-                    status: app.status,
-                    internship: { title: "Silinmiş İlan", company: { name: "-" } }
-                };
-            }
+            if (!details) return null;
 
-            return {
-                _id: app._id,
-                status: app.status,
-                internship: {
-                    _id: details._id,
-                    title: details.title,
-                    company: details.company || { name: "Bilinmeyen Şirket" }
-                }
-            };
+            // Return the full internship object directly
+            return details;
         }).filter(Boolean);
 
         res.json(results);
@@ -151,10 +140,18 @@ router.put('/profile', protect, async (req, res) => {
 
             // Öğrenci Alanları
             if (user.role === 'student') {
-                user.classYear = req.body.classYear || user.classYear;
-                user.gpa = req.body.gpa || user.gpa;
-                user.englishLevel = req.body.englishLevel || user.englishLevel;
-                user.successScore = req.body.successScore || user.successScore;
+                if (req.body.classYear) user.classYear = req.body.classYear;
+
+                // Sayısal alan kontrolü (Boş string gelirse 0 veya null yap)
+                if (req.body.gpa !== undefined && req.body.gpa !== '') {
+                    user.gpa = req.body.gpa;
+                }
+
+                if (req.body.englishLevel) user.englishLevel = req.body.englishLevel;
+
+                if (req.body.successScore !== undefined && req.body.successScore !== '') {
+                    user.successScore = req.body.successScore;
+                }
                 user.socialActivities = req.body.socialActivities || user.socialActivities;
                 user.documents = req.body.documents || user.documents;
                 user.preferences = req.body.preferences || user.preferences;
@@ -203,6 +200,51 @@ router.put('/profile', protect, async (req, res) => {
     } catch (error) {
         console.error("Profil Güncelleme Hatası:", error);
         res.status(500).json({ message: 'Hata oluştu' });
+    }
+});
+
+
+
+// @desc    Profil Fotoğrafı Yükle
+router.post('/upload-avatar', protect, upload.single('profilePicture'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ message: "Dosya yüklenemedi." });
+        }
+
+        const user = await User.findById(req.user._id);
+        if (!user) return res.status(404).json({ message: "Kullanıcı bulunamadı." });
+
+        user.profilePicture = req.file.path; // Cloudinary URL
+        await user.save();
+
+        res.json({ message: "Profil fotoğrafı güncellendi.", profilePicture: user.profilePicture });
+    } catch (error) {
+        console.error("Avatar Upload Hatası:", error);
+        res.status(500).json({ message: "Yükleme sırasında hata oluştu: " + error.message });
+    }
+});
+
+// @desc    Profil Fotoğrafını Kaldır
+router.delete('/delete-avatar', protect, async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+        if (!user) return res.status(404).json({ message: "Kullanıcı bulunamadı." });
+
+        if (user.profilePicture && !user.profilePicture.includes('anonymous-avatar-icon')) {
+            // Cloudinary'den sil
+            const publicId = 'cadet_avatars/' + user._id.toString() + '_avatar';
+            await cloudinary.uploader.destroy(publicId);
+        }
+
+        // DB'de varsayılan avatara dön
+        user.profilePicture = "https://icon-library.com/images/anonymous-avatar-icon/anonymous-avatar-icon-25.jpg";
+        await user.save();
+
+        res.json({ message: "Profil fotoğrafı kaldırıldı.", profilePicture: user.profilePicture });
+    } catch (error) {
+        console.error("Avatar Silme Hatası:", error);
+        res.status(500).json({ message: "Silme sırasında hata oluştu: " + error.message });
     }
 });
 
@@ -530,19 +572,21 @@ router.get('/scout/:internshipId', protect, async (req, res) => {
         const shipType = internship.shipType;
         const companyId = req.user._id;
         const internshipDept = internship.department;
-        let targetStudentDept = "";
+        let deptRegex;
         if (internshipDept === 'Güverte') {
-            targetStudentDept = "Deniz Ulaştırma İşletme Mühendisliği";
+            deptRegex = /Deniz Ulaştırma|Güverte/i;
         } else if (internshipDept === 'Makine') {
-            targetStudentDept = "Gemi Makineleri İşletme Mühendisliği";
+            deptRegex = /Gemi Makineleri|Makine/i;
         }
+
+        console.log(`Scout Query: ShipType=${shipType}, DeptRegex=${deptRegex}`);
 
         const candidates = await User.find({
             role: 'student',
-            currentStatus: 'Staj Arıyor',
+            // currentStatus: 'Staj Arıyor', // Kısıtlamayı kaldırdık
             'preferences.shipTypes': shipType,
-            department: targetStudentDept
-        }).select('name surname department classYear gpa englishLevel successScore preferences email');
+            department: { $regex: deptRegex }
+        }).select('name surname department classYear gpa englishLevel successScore preferences email profilePicture'); // profilePicture eklendi
 
         const favorited = [];
         const others = [];
@@ -562,6 +606,47 @@ router.get('/scout/:internshipId', protect, async (req, res) => {
         console.error("Scout Hatası:", error);
         res.status(500).json({ message: "Sunucu hatası" });
     }
+});
+
+// --- ÖĞRENCİ PORTFOLYO YÜKLEME ---
+
+// CV Yükle
+router.post('/upload-cv', protect, upload.single('cv'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "Dosya yok." });
+        const user = await User.findById(req.user._id);
+        user.cvUrl = req.file.path;
+        await user.save();
+        res.json({ message: "CV yüklendi.", cvUrl: user.cvUrl });
+    } catch (e) { res.status(500).json({ message: "Hata oluştu." }); }
+});
+
+// Transkript Yükle (Portfolyo için PDF)
+router.post('/upload-transcript-pdf', protect, upload.single('transcript'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "Dosya yok." });
+        const user = await User.findById(req.user._id);
+        user.transcriptUrl = req.file.path;
+        await user.save();
+        res.json({ message: "Transkript yüklendi.", transcriptUrl: user.transcriptUrl });
+    } catch (e) { res.status(500).json({ message: "Hata oluştu." }); }
+});
+
+// Sertifika Yükle
+router.post('/upload-certificate', protect, upload.single('certificate'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "Dosya yok." });
+        const { name } = req.body;
+        const user = await User.findById(req.user._id);
+
+        user.certificates.push({
+            name: name || "Yeni Sertifika",
+            url: req.file.path
+        });
+
+        await user.save();
+        res.json({ message: "Sertifika eklendi.", certificates: user.certificates });
+    } catch (e) { res.status(500).json({ message: "Hata oluştu." }); }
 });
 
 module.exports = router;

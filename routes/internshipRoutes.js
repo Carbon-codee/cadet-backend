@@ -12,7 +12,7 @@ const sendEmail = require('../utils/sendEmail');
 router.get('/', async (req, res) => {
     try {
         const internships = await Internship.find({ isActive: true })
-            .populate('company', 'name')
+            .populate('company', 'name profilePicture')
             .sort({ createdAt: -1 });
         res.json(internships);
     } catch (error) {
@@ -34,7 +34,7 @@ router.get('/company/mine', protect, isCompany, async (req, res) => {
 // 3. Tek bir ilanı getir (Detay Sayfası İçin)
 router.get('/:id', protect, async (req, res) => {
     try {
-        const internship = await Internship.findById(req.params.id).populate('company', 'name email');
+        const internship = await Internship.findById(req.params.id).populate('company', 'name email profilePicture');
         if (internship) res.json(internship);
         else res.status(404).json({ message: 'İlan bulunamadı.' });
     } catch (error) {

@@ -138,7 +138,8 @@ router.post('/login', async (req, res) => {
                 office: user.office,
                 companyInfo: user.companyInfo,
                 preferences: user.preferences,
-                kvkkApproved: user.kvkkApproved // <-- KVKK ONAY DURUMU
+                kvkkApproved: user.kvkkApproved, // <-- KVKK ONAY DURUMU
+                profilePicture: user.profilePicture // YENİ EKLENDİ
             });
         } else {
             res.status(401).json({ message: 'Geçersiz e-posta veya şifre.' });

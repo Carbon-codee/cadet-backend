@@ -11,6 +11,17 @@ const userSchema = mongoose.Schema({
     name: { type: String, required: true },
     surname: { type: String }, // <-- BU SATIRI EKLE
     email: { type: String, required: true, unique: true },
+    profilePicture: { type: String, default: "https://icon-library.com/images/anonymous-avatar-icon/anonymous-avatar-icon-25.jpg" },
+
+    // --- Öğrenci Portfolyo Alanları ---
+    cvUrl: { type: String }, // PDF URL
+    transcriptUrl: { type: String }, // PDF URL
+    certificates: [{
+        name: { type: String },
+        url: { type: String } // PDF/Resim URL
+    }],
+    // ----------------------------------
+
     password: { type: String, required: true },
     role: { type: String, required: true, enum: ['student', 'company', 'lecturer', 'admin'] },
     isVerified: { type: Boolean, default: false },

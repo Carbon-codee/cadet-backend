@@ -22,7 +22,8 @@ const app = express();
 
 // --- SONRA UYGULAMAYI KULLANAN AYARLARI YAP (MIDDLEWARE) ---
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Artırıldı: PDF yüklemeleri için
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Ana Rota
 app.get('/', (req, res) => {
@@ -38,6 +39,7 @@ app.use('/api/content', contentRoutes);
 app.use('/api/admin', require('./routes/adminRoutes')); // YENİ: Admin Rotaları
 app.use('/api/messages', require('./routes/messageRoutes')); // Mesajlaşma rotası
 app.use('/api/study-plan', require('./routes/studyPlanRoutes'));
+app.use('/api/resources', require('./routes/resourceRoutes')); // YENİ: Kaynaklar rotası
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, console.log(`Sunucu ${PORT} portunda çalışıyor...`));
