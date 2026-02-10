@@ -4,12 +4,14 @@ const questionSchema = mongoose.Schema({
     questionText: { type: String, required: true },
     options: [{ type: String, required: true }], // 4 options
     correctAnswer: { type: String, required: true }, // The correct option string
+    difficulty: { type: String, enum: ['Kolay', 'Orta', 'Zor'], default: 'Orta' }
 });
 
 const dayModuleSchema = mongoose.Schema({
     dayNumber: { type: Number, required: true },
     topic: { type: String, required: true },
     lectureContent: { type: String }, // Konu anlatımı metni
+    youtubeUrl: { type: String }, // YouTube video URL
     isCompleted: { type: Boolean, default: false },
     isLocked: { type: Boolean, default: true },
     unlockDate: { type: Date }, // When this module becomes accessible

@@ -152,13 +152,13 @@ const checkAndCreatePlan = async (req, res) => {
             );
 
             // Map AI output to Database Schema
-            modulesData = curriculum.map(item => ({
+            modulesData = curriculum.map((item, index) => ({
                 dayNumber: item.day,
                 topic: item.topic,
                 lectureContent: `## ${item.topic}\n\n*Bu içerik öğrencinin profiline özel olarak hazırlanmaktadır. "Derse Başla" butonuna bastığınızda detaylı konu anlatımı yüklenecektir.*`,
                 isCompleted: false,
-                isLocked: false, // For demo purposes, maybe unlock all? Or lock? Let's keep unlocked for testing.
-                unlockDate: new Date(),
+                isLocked: item.day !== 1, // Only Day 1 is unlocked initially
+                unlockDate: item.day === 1 ? new Date() : null, // Only Day 1 has initial unlock date
                 questions: [] // Questions will be generated when content is loaded
             }));
 
@@ -169,6 +169,13 @@ const checkAndCreatePlan = async (req, res) => {
 
         // Ensure modules are sorted by dayNumber
         modulesData.sort((a, b) => a.dayNumber - b.dayNumber);
+
+        // Lock all days except the first one (in case fallback was used)
+        modulesData = modulesData.map((module, index) => ({
+            ...module,
+            isLocked: index !== 0,
+            unlockDate: index === 0 ? new Date() : null
+        }));
 
         const newPlan = await StudyPlan.create({
             student: student._id,
@@ -210,7 +217,7 @@ const getStudyPlan = async (req, res) => {
 // @access  Private
 const submitDayResult = async (req, res) => {
     try {
-        const { planId, dayNumber, correctCount } = req.body;
+        const { planId, dayNumber, correctCount, correctQuestionIds } = req.body;
         const plan = await StudyPlan.findById(planId);
 
         if (!plan) return res.status(404).json({ message: 'Plan bulunamadı' });
@@ -220,41 +227,95 @@ const submitDayResult = async (req, res) => {
 
         const module = plan.modules[moduleIndex];
 
+        // RULE 1: Check minimum correct answers (10 required)
+        const actualCorrectCount = correctQuestionIds && Array.isArray(correctQuestionIds)
+            ? correctQuestionIds.length
+            : (correctCount || 0);
+
+        const MIN_CORRECT_REQUIRED = 10;
+
+        if (actualCorrectCount < MIN_CORRECT_REQUIRED) {
+            return res.status(400).json({
+                message: `Test başarısız! En az ${MIN_CORRECT_REQUIRED} doğru cevap gereklidir. Sizin doğru sayınız: ${actualCorrectCount}. Lütfen testi tekrar çözün.`,
+                passed: false,
+                correctCount: actualCorrectCount,
+                requiredCount: MIN_CORRECT_REQUIRED
+            });
+        }
+
+        // If already completed, don't allow re-completion
         if (module.isCompleted) {
             return res.status(400).json({ message: 'Bu gün zaten tamamlandı.' });
         }
 
-        // 20 questions total. Let's say passing is not required, just completion, but XP depends on score.
-        // Or user requirement: "çözdüğü sorulara göre xp kazancak"
+        // Calculate XP based on Difficulty
+        let gainedXp = 0;
 
-        const gainedXp = correctCount * 5; // 5 XP per correct answer. Max 100 XP/day.
+        console.log(`[DEBUG] Submitting Day Result for User: ${req.user._id}`);
+        console.log(`[DEBUG] correctQuestionIds:`, correctQuestionIds);
 
-        // Optimistic update with findOneAndUpdate to avoid VersionError
+        if (correctQuestionIds && Array.isArray(correctQuestionIds)) {
+            // New Logic: Dynamic XP based on difficulty
+            module.questions.forEach(q => {
+                // Ensure IDs are strings for comparison
+                const qId = q._id ? q._id.toString() : null;
+                if (qId && correctQuestionIds.includes(qId)) {
+                    if (q.difficulty === 'Zor') gainedXp += 10;
+                    else if (q.difficulty === 'Kolay') gainedXp += 5;
+                    else gainedXp += 7; // Orta difficulty
+                }
+            });
+        } else {
+            // Fallback Logic
+            gainedXp = actualCorrectCount * 5;
+        }
+
+        console.log(`[DEBUG] Calculated gainedXp: ${gainedXp}`);
+
+        // RULE 2: Mark current day as complete
         await StudyPlan.findOneAndUpdate(
             { _id: planId, "modules.dayNumber": dayNumber },
             {
                 $set: {
                     "modules.$.isCompleted": true,
-                    "modules.$.score": correctCount
+                    "modules.$.score": actualCorrectCount
                 }
             }
         );
+
+        // RULE 3: Unlock next day with 20-hour delay
+        const nextDayNumber = dayNumber + 1;
+        const nextModuleIndex = plan.modules.findIndex(m => m.dayNumber === nextDayNumber);
+
+        if (nextModuleIndex !== -1) {
+            const unlockTime = new Date();
+            unlockTime.setHours(unlockTime.getHours() + 20); // 20 hours from now
+
+            await StudyPlan.findOneAndUpdate(
+                { _id: planId, "modules.dayNumber": nextDayNumber },
+                {
+                    $set: {
+                        "modules.$.isLocked": true, // Keep locked until unlockDate
+                        "modules.$.unlockDate": unlockTime
+                    }
+                }
+            );
+
+            console.log(`[UNLOCK] Day ${nextDayNumber} will unlock at: ${unlockTime}`);
+        }
 
         // Update User XP atomically to prevent race conditions
         const updatedUser = await User.findByIdAndUpdate(
             req.user._id,
             {
                 $inc: { xp: gainedXp },
-                // Recalculate level based on new XP (approximate level)
-                // Note: MongoDB doesn't support calculated fields in update easily without aggregation pipeline.
-                // For atomic simplicity, we'll increment XP here. Level can be calculated on read or separate hook.
-                // However, if we want to store level:
             },
             { new: true }
         );
 
-        // Simple Level Update (If critical, can be done in pre-save hook or separate atomic set if logic allows)
-        // For now, let's just trust XP is source of truth.
+        console.log(`[DEBUG] User Updated. New XP: ${updatedUser ? updatedUser.xp : 'User Not Found'}`);
+
+        // Simple Level Update
         if (updatedUser) {
             const newLevel = Math.floor(updatedUser.xp / 1000) + 1;
             if (updatedUser.level !== newLevel) {
@@ -262,7 +323,13 @@ const submitDayResult = async (req, res) => {
             }
         }
 
-        res.json({ message: 'Tebrikler! Gün tamamlandı.', gainedXp, totalXp: user.xp });
+        res.json({
+            message: 'Tebrikler! Gün tamamlandı.',
+            passed: true,
+            gainedXp,
+            totalXp: updatedUser ? updatedUser.xp : 0,
+            nextDayUnlockTime: nextModuleIndex !== -1 ? new Date(Date.now() + 20 * 60 * 60 * 1000) : null
+        });
 
     } catch (error) {
         console.error(error);
@@ -312,60 +379,148 @@ const getContentForDay = async (req, res) => {
     try {
         const { planId, dayNumber } = req.params;
         const plan = await StudyPlan.findById(planId);
-
         if (!plan) return res.status(404).json({ message: 'Plan bulunamadı' });
 
-        // Find module
-        const moduleIndex = plan.modules.findIndex(m => m.dayNumber == dayNumber);
-        if (moduleIndex === -1) return res.status(404).json({ message: 'Gün bulunamadı' });
+        const module = plan.modules.find(m => m.dayNumber == dayNumber);
 
-        const module = plan.modules[moduleIndex];
+        // Check if content needs generation (placeholder check)
+        // Check triggers: Placeholder text, question count low, or explicitly "AI Generated" not present in deep check
+        const isPlaceholder = (module.lectureContent.includes("hazırlanmaktadır") || module.lectureContent.includes("detaylarını öğreneceksiniz")) && module.lectureContent.length < 500;
 
-        // If content is just a placeholder (or we want to regenerate), generate it
-        // We assume "placeholder" if content length is short or distinct flag
-        // For this demo, let's say if it doesn't have "AI Generated" or Real content signature
-        // Or simply, we can enforce generation if it looks like the default template.
-
-        // Simple check: If questions are dummy (length checking or content)
-        // BUT for perfromance, let's just use what we have if it's there. 
-        // TO ENABLE AI: We will assume the initial generation was "titles only" or "briefs".
-
-        // Let's re-generate if it's the "default" text we set in generateCurriculum
-        // Checks for either the old text or the new text
-        const isDefault = (module.lectureContent.includes("detaylarını öğreneceksiniz") || module.lectureContent.includes("özel olarak hazırlanmaktadır")) && module.lectureContent.length < 500;
-
-        if (isDefault) {
-            // Generating Real Content
+        if (isPlaceholder || module.questions.length < 5) {
             const aiService = require('../utils/aiService');
+            const MasterLesson = require('../models/MasterLesson'); // Import here to avoid circular dep issues on top if any
 
-            // Determine if weak subject
             const isWeak = module.topic.includes("Eksik Konu");
 
-            const aiResult = await aiService.generateDailyContent(module.topic, isWeak);
+            // Helper: Normalize Turkish text for comparison
+            const normalizeTurkish = (text) => {
+                return text.toLowerCase()
+                    .replace(/ş/g, 's').replace(/ğ/g, 'g')
+                    .replace(/ı/g, 'i').replace(/ö/g, 'o')
+                    .replace(/ü/g, 'u').replace(/ç/g, 'c');
+            };
 
-            // Optimistic update with findOneAndUpdate to avoid VersionError
-            await StudyPlan.findOneAndUpdate(
+            // Helper: Extract core words from topic
+            const extractCoreWords = (topic) => {
+                const normalized = normalizeTurkish(topic);
+                // Remove common suffixes and metadata
+                const cleaned = normalized
+                    .replace(/\s*-\s*(bolum|ozel calisma|eksik konu takviyesi|performans olcumu|giris).*$/i, '')
+                    .replace(/[^a-z0-9\s]/gi, '');
+
+                // Remove stop words and split
+                const stopWords = ['ve', 'ile', 'icin', 'bir', 'bu', 'su', 'o', 'de', 'da'];
+                return cleaned.split(/\s+/)
+                    .filter(word => word.length > 2 && !stopWords.includes(word));
+            };
+
+            // Helper: Check if two topics are similar based on word overlap
+            const areSimilarTopics = (topic1, topic2, threshold = 0.6) => {
+                const words1 = extractCoreWords(topic1);
+                const words2 = extractCoreWords(topic2);
+
+                if (words1.length === 0 || words2.length === 0) return false;
+
+                // Count matching words
+                const matches = words1.filter(w => words2.includes(w)).length;
+
+                // Calculate similarity from both directions
+                const similarity1 = matches / words1.length;
+                const similarity2 = matches / words2.length;
+
+                // Return true if either direction exceeds threshold
+                return similarity1 >= threshold || similarity2 >= threshold;
+            };
+
+            // 1. NORMALIZE TOPIC & CHECK MASTER LESSON CACHE (with intelligent fuzzy matching)
+            const normalizedTopic = module.topic.trim().toLowerCase();
+
+            // Try exact match first
+            let masterLesson = await MasterLesson.findOne({ topic: normalizedTopic });
+
+            // If no exact match, try word-based similarity matching
+            if (!masterLesson) {
+                const allMasterLessons = await MasterLesson.find({});
+
+                for (const lesson of allMasterLessons) {
+                    if (areSimilarTopics(module.topic, lesson.displayTopic || lesson.topic)) {
+                        masterLesson = lesson;
+                        console.log(`[Cache Similarity Hit] "${lesson.displayTopic}" ≈ "${module.topic}"`);
+                        break;
+                    }
+                }
+            }
+
+            // Admin Force Refresh Logic
+            const forceRefresh = req.query.refresh === 'true' && req.user.role === 'admin';
+
+            let contentToUse = null;
+
+            if (masterLesson && !forceRefresh) {
+                console.log(`[Cache Hit] Found MasterLesson for topic: ${module.topic}`);
+                contentToUse = {
+                    content: masterLesson.content,
+                    questions: masterLesson.questions,
+                    youtubeUrl: masterLesson.youtubeUrl
+                };
+            } else {
+                console.log(`[Cache Miss] Generating AI content for topic: ${module.topic} (Refresh: ${forceRefresh})`);
+
+                // 2. AI GENERATION (High Quality + Perfect Video)
+                const aiResult = await aiService.generateHighQualityContent(module.topic, isWeak);
+
+                contentToUse = {
+                    content: aiResult.content,
+                    questions: aiResult.questions,
+                    youtubeUrl: aiResult.youtubeUrl
+                };
+
+                // 3. SAVE / UPDATE MASTER LESSON CACHE (Upsert)
+                try {
+                    await MasterLesson.findOneAndUpdate(
+                        { topic: normalizedTopic },
+                        {
+                            topic: normalizedTopic,
+                            displayTopic: module.topic,
+                            content: contentToUse.content,
+                            questions: contentToUse.questions,
+                            youtubeUrl: contentToUse.youtubeUrl,
+                            language: 'tr',
+                            lastUpdated: Date.now()
+                        },
+                        { upsert: true, new: true }
+                    );
+                    console.log(`[Cache Save] Updated MasterLesson: ${module.topic}`);
+                } catch (dbError) {
+                    console.error("MasterLesson Save Error:", dbError.message);
+                }
+            }
+
+            // 4. UPDATE USER STUDY PLAN
+            const updatedPlan = await StudyPlan.findOneAndUpdate(
                 { _id: planId, "modules.dayNumber": dayNumber },
                 {
                     $set: {
-                        "modules.$.lectureContent": aiResult.content,
-                        "modules.$.questions": (aiResult.questions && aiResult.questions.length > 0) ? aiResult.questions : []
+                        "modules.$.lectureContent": contentToUse.content,
+                        "modules.$.questions": contentToUse.questions,
+                        "modules.$.youtubeUrl": contentToUse.youtubeUrl
                     }
-                }
+                },
+                { new: true } // Return updated document
             );
 
-            // Update local object specifically for the response
-            module.lectureContent = aiResult.content;
-            if (aiResult.questions && aiResult.questions.length > 0) {
-                module.questions = aiResult.questions;
-            }
+            // Get the updated module with _id on questions
+            const updatedModule = updatedPlan.modules.find(m => m.dayNumber == dayNumber);
+
+            // Use the updated module for response
+            return res.json(updatedModule);
         }
 
         res.json(module);
-
     } catch (error) {
-        console.error("Content Gen Error:", error);
-        res.status(500).json({ message: 'İçerik getirilemedi.' });
+        console.error('İçerik üretiminde hata oluştu:', error);
+        res.status(500).json({ message: 'İçerik üretiminde hata oluştu.' });
     }
 };
 
@@ -527,6 +682,92 @@ const chatWithAi = async (req, res) => {
     }
 };
 
+// @desc    Get all cached lessons (Admin)
+// @route   GET /api/study-plan/master-lessons
+// @access  Private/Admin
+const getAllMasterLessons = async (req, res) => {
+    try {
+        // Basic check for admin role (if needed more strict, use middleware)
+        if (req.user.role !== 'admin' && req.user.role !== 'company') {
+            return res.status(403).json({ message: 'Yetkisiz işlem' });
+        }
+
+        const MasterLesson = require('../models/MasterLesson');
+        const lessons = await MasterLesson.find().sort({ lastUpdated: -1 });
+        res.json(lessons);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Ders havuzu yüklenirken hata oluştu.' });
+    }
+};
+
+// @desc    Get specific master lesson by ID
+// @route   GET /api/study-plan/master-lessons/:id
+// @access  Private/Admin
+const getMasterLessonById = async (req, res) => {
+    try {
+        if (req.user.role !== 'admin' && req.user.role !== 'company') {
+            return res.status(403).json({ message: 'Yetkisiz işlem' });
+        }
+
+        const MasterLesson = require('../models/MasterLesson');
+        const lesson = await MasterLesson.findById(req.params.id);
+
+        if (!lesson) {
+            return res.status(404).json({ message: 'Ders bulunamadı' });
+        }
+
+        res.json(lesson);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Ders yüklenirken hata oluştu.' });
+    }
+};
+
+// @desc    Get all student plans (Admin)
+// @route   GET /api/study-plan/admin/all
+// @access  Private/Admin
+const getAllStudentPlans = async (req, res) => {
+    try {
+        if (req.user.role !== 'admin' && req.user.role !== 'company') {
+            return res.status(403).json({ message: 'Yetkisiz işlem' });
+        }
+
+        const plans = await StudyPlan.find()
+            .populate('student', 'name surname email')
+            .populate('targetCompany', 'name')
+            .sort({ createdAt: -1 });
+
+        res.json(plans);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Öğrenci planları yüklenirken hata oluştu.' });
+    }
+};
+
+// @desc    Delete a specific study plan (Admin)
+// @route   DELETE /api/study-plan/admin/:id
+// @access  Private/Admin
+const deleteStudentPlan = async (req, res) => {
+    try {
+        if (req.user.role !== 'admin' && req.user.role !== 'company') {
+            return res.status(403).json({ message: 'Yetkisiz işlem' });
+        }
+
+        const plan = await StudyPlan.findById(req.params.id);
+
+        if (!plan) {
+            return res.status(404).json({ message: 'Plan bulunamadı' });
+        }
+
+        await plan.deleteOne();
+        res.json({ message: 'Plan başarıyla silindi' });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Plan silinirken hata oluştu.' });
+    }
+};
+
 module.exports = {
     checkAndCreatePlan,
     getStudyPlan,
@@ -534,5 +775,9 @@ module.exports = {
     archiveCurrentPlan,
     getPlanHistory,
     getContentForDay,
-    chatWithAi
+    chatWithAi,
+    getAllMasterLessons,
+    getMasterLessonById,
+    getAllStudentPlans, // New export
+    deleteStudentPlan   // New export
 };

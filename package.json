@@ -32,7 +32,8 @@
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^7.0.12",
     "openai": "^6.16.0",
-    "resend": "^6.8.0"
+    "resend": "^6.8.0",
+    "yt-search": "^2.13.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

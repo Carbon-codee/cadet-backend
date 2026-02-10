@@ -1,31 +1,99 @@
 const OpenAI = require("openai");
+const yts = require('yt-search');
 
 // Fallback logic if no API key is provided
 const SIMULATED_DELAY = 1500;
 
+// --- HELPER: REAL YOUTUBE SEARCH WITH QUALITY FILTER ---
+const getPerfectVideo = async (aiGeneratedTopic) => {
+    try {
+        // 1. AI'dan gelen çok spesifik arama terimi
+        const searchQuery = `${aiGeneratedTopic} technical training maritime lecture`;
+        console.log(`[YouTube Search] Searching for: ${searchQuery}`);
+
+        // 2. Güvenilir kanallar (Bunlardan gelirse yapışıyoruz)
+        const trustedChannels = [
+            "Maritime Training",
+            "Seagull",
+            "Videotel",
+            "Wartsila",
+            "Naval Arch",
+            "Marine Online",
+            "IMO"
+        ];
+
+        const r = await yts(searchQuery);
+
+        // 3. Videoları puanlayarak filtrele
+        const bestVideo = r.videos.find(v => {
+            const title = v.title.toLowerCase();
+            const author = v.author.name.toLowerCase();
+
+            // Şirket veya Eğitim kanalıysa +10 puan (Güvenilir kanal kontrolü)
+            const isTrusted = trustedChannels.some(ch => author.includes(ch.toLowerCase()));
+
+            // Çöp videoları engelle
+            const blacklist = ['game', 'simulator', 'funny', 'accident', 'facia', 'minecraft', 'roblox', 'vlog', 'reaction', 'shorts'];
+            const isNotTrash = !blacklist.some(w => title.includes(w));
+
+            // Eğitim videosu genelde 4-20 dk olur (240 - 1200 sn)
+            // Ancak güvendiğimiz kanalların kısa/uzun videoları da değerlidir.
+            const isRightDuration = v.seconds > 240 && v.seconds < 1200;
+
+            // Güvenilir kanalsa süreye bile bakmayabiliriz ama yine de çok kısa olmasın (> 2 dk)
+            if (isTrusted && v.seconds > 120) return true;
+
+            return isNotTrash && isRightDuration;
+        });
+
+        if (bestVideo) {
+            console.log(`[YouTube Search] Found PERFECT video: ${bestVideo.title} from ${bestVideo.author.name}`);
+            return bestVideo.url;
+        }
+
+        // Fallback: Return top result if nothing perfect found (better than nothing)
+        // But still filter for obvious trash
+        if (r.videos.length > 0) {
+            console.log(`[YouTube Search] Perfect match not found, using top result.`);
+            return r.videos[0].url;
+        }
+
+        return "https://www.youtube.com/user/IMOHQ";
+
+    } catch (e) {
+        console.error("[YouTube Search] Error:", e.message);
+        return "https://www.youtube.com/user/IMOHQ";
+    }
+};
+
 const getMockContent = (topic) => {
     return {
+        youtubeUrl: "https://www.youtube.com/watch?v=txs1L_dYJ9A", // Default fallback
         content: `## ${topic} (AI Generated)\n\nBu içerik, yapay zeka servisine erişilemediği için **simüle edilmiştir**.\n\n### Temel Bilgiler\n${topic}, denizcilik dünyasında kritik bir öneme sahiptir. Profesyonel bir zabit olarak bu konunun detaylarına hakim olmanız gerekir.\n\n### Önemli Noktalar\n- **Kural 1:** Daima güvenliği ön planda tutun.\n- **Kural 2:** Uluslararası regülasyonlara (IMO) uyun.\n- **Kural 3:** Ekip iletişimi hayati önem taşır.\n\n> "Deniz sakin olduğunda herkes kaptan kesilir."\n\nLütfen aşağıdaki testi dikkatlice çözünüz.`,
         questions: [
             {
                 questionText: `${topic} ile ilgili en önemli öncelik nedir?`,
                 options: ["Güvenlik", "Hız", "Maliyet", "Konfor"],
-                correctAnswer: "Güvenlik"
+                correctAnswer: "Güvenlik",
+                difficulty: "Kolay"
             },
             {
                 questionText: "Aşağıdakilerden hangisi bu konuda yetkili kurumdur?",
                 options: ["IMO", "FIFA", "UNESCO", "NATO"],
-                correctAnswer: "IMO"
+                correctAnswer: "IMO",
+                difficulty: "Kolay"
             },
             {
                 questionText: "Acil durumda ilk yapılması gereken nedir?",
                 options: ["Sakin kalmak ve prosedürü uygulamak", "Gemiyi terk etmek", "Aileyi aramak", "Yemek yemek"],
-                correctAnswer: "Sakin kalmak ve prosedürü uygulamak"
+                correctAnswer: "Sakin kalmak ve prosedürü uygulamak",
+                difficulty: "Orta"
             },
             {
                 questionText: "Bu konu hangi sözleşme kapsamındadır?",
                 options: ["SOLAS", "Kira Sözleşmesi", "İş Kanunu", "Medeni Kanun"],
-                correctAnswer: "SOLAS"
+                correctAnswer: "SOLAS",
+                difficulty: "Orta"
             }
         ]
     };
@@ -70,55 +138,86 @@ const generateJsonWithRetry = async (openai, modelName, messages, maxRetries = 3
 
 
 const aiService = {
-    generateDailyContent: async (topic, weakSubjectMode) => {
+    generateHighQualityContent: async (topic, weakSubjectMode) => {
         try {
             const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
-            if (!apiKey || apiKey.startsWith("sk-proj")) {
-                // Note: sk-proj indicates a project usage, usually fine, but simple check.
-                // Actually we just check if it exists.
-            }
             if (!apiKey) throw new Error("No OpenAI API Key configured");
 
             const openai = new OpenAI({ apiKey: apiKey });
-            // Using gpt-4o-mini as requested alternative to gpt-5-mini
-            const modelName = "gpt-4o-mini";
+            // Using gpt-4o as requested for high quality
+            const modelName = "gpt-4o";
 
-            const systemPrompt = `Sen uzman bir Denizcilik Eğitmenisin.
-                GÖREVİN:
-                1. Verilen konu hakkında Markdown formatında ÇOK DETAYLI, AKADEMİK ve KAPSAMLI bir ders notu yaz.
-                   - **HEDEF KELİME SAYISI:** EN AZ 1500 KELİME OLMALIDIR.
-                   - **İTÜ Denizcilik Fakültesi** müfredat standartlarına tam uygun olsun.
-                   - Bir denizcilik akademisi hocası gibi anlat.
-                   - Gerçek hayattan denizcilik örnekleri (vaka analizleri) ver.
-                   - Karmaşık terimleri basit analojilerle açıkla.
-                   - Önemli kısımları **kalın** işaretle.
-
-                2. Konuyla ilgili TAM OLARAK 20 ADET (Daha az olamaz) YARATICI, ZORLAYICI ve SENARYO BAZLI çoktan seçmeli soru hazırla.
-                   - KURALLAR:
-                     - "options" listesinde 4 adet şık olsun.
-                     - DOĞRU CEVABI (correctAnswer) ŞIKLAR ARASINDA RASTGELE DAĞIT (Hepsi A şıkkı OLMASIN, karıştır).
-                     - "correctAnswer" alanı, "options" listesindeki doğru şıkkın TAM METNİ ile BİREBİR AYNI olmalıdır.
-                     - Asla sadece A, B, C gibi harf yazma, cevabın kendisini yaz.
+            // SYSTEM PROMPT - Youtube URL removed from AI tasks
+            const systemPrompt = `Sen, Uluslararası Denizcilik Örgütü (IMO) standartlarına hakim, STCW sertifikalı uzman bir Denizcilik Eğitmenisin.
                 
-                Çıktı Formatı SADECE geçerli bir JSON olmalıdır.
-                JSON Formatı:
+                GÖREVİN:
+                1. "videoSearchTerm": Bu konuyla ilgili EN İYİ YouTube videosunu bulmamızı sağlayacak İNGİLİZCE teknik arama terimi.
+                   - Örnek: "Centrifugal Pump Overhaust" veya "Colreg Rule 19 explanation".
+                   - Sadece konuyu değil, ne aradığını belirten teknik bir terim olsun.
+
+                2. "content": Verilen konu hakkında Markdown formatında AKADEMİK, TEKNİK ve DOĞRUDAN STCW MÜFREDATINA UYGUN ders notları hazırla.
+                   - **HEDEF:** En az 1500 kelime, derinlemesine teknik bilgi.
+                   - Yüzeysel geçme, detaylara in (Örn: Pompa karakteristikleri, yasal dayanaklar, formüller).
+                   - Gerçek hayattan kaza raporları veya vaka analizleri (Case Studies) ekle.
+                   - Markdown formatını zengin kullan: 
+                     * Başlıklar (##, ###)
+                     * Madde işaretli listeler
+                     * Numaralı listeler
+                     * Tablolar
+                     * Alıntılar (>)
+                     * Kalın ve italik vurgular
+                   - **ÖNEMLİ:** Mermaid diyagramları KULLANMA. Bunun yerine süreçleri madde işaretli veya numaralı listelerle açıkla.
+                   - Karmaşık verileri tablolarla sun.
+
+                3. "questions": TAM OLARAK 20 ADET Özgün Soru Hazırla.
+                   - Sorular Bloom Taksonomisi'ne göre dağıtılmalı:
+                     - %30 Kolay (Hatırlama/Bilgi)
+                     - %40 Orta (Kavrama/Uygulama)
+                     - %30 Zor (Analiz/Değerlendirme - Vaka bazlı)
+                   - Şıkları (A, B, C, D) rastgele dağıt.
+                   - Her soru için "difficulty" alanını belirt: 'Kolay', 'Orta', 'Zor'.
+
+                Çıktı Formatı SADECE geçerli bir JSON olmalıdır:
                 {
-                    "content": "Markdown ders içeriği...",
+                    "videoSearchTerm": "Technical English Search Term",
+                    "content": "# Konu Başlığı\\n\\n## Giriş...",
                     "questions": [
-                        { "questionText": "...", "options": ["Şık 1", "Şık 2", "Şık 3", "Şık 4"], "correctAnswer": "Şık 1" }
+                        { 
+                            "questionText": "Soru metni...", 
+                            "options": ["Şık 1", "Şık 2", "Şık 3", "Şık 4"], 
+                            "correctAnswer": "Şık 1" (Doğru şıkkın tam metni),
+                            "difficulty": "Zor"
+                        }
                     ]
                 }
             `;
 
             const userPrompt = `Konu: "${topic}"
-            Mod: ${weakSubjectMode ? "Detaylı ve açıklayıcı (Öğrenci bu konuda zayıf)" : "Standart özet"}.`;
+            Mod: ${weakSubjectMode ? "Detaylı ve açıklayıcı (Öğrenci bu konuda zayıf, ekstra örnekler ver)" : "Profesyonel teknik anlatım"}.
+            Lütfen içerik, teknik arama terimi ve soruları eksiksiz üret.`;
 
             const messages = [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
             ];
 
-            return await generateJsonWithRetry(openai, modelName, messages);
+            // 1. Generate Content from AI
+            const result = await generateJsonWithRetry(openai, modelName, messages);
+
+            // 2. Fetch Real YouTube Video (Independent Step)
+            // Use the AI-generated specific search term, or fallback to topic
+            const searchTerm = result.videoSearchTerm || topic;
+            const realVideoUrl = await getPerfectVideo(searchTerm);
+
+            // 3. Attach Video URL to Result
+            if (realVideoUrl) {
+                result.youtubeUrl = realVideoUrl;
+            } else {
+                // Fallback to a generic maritime channel if search fails
+                result.youtubeUrl = "https://www.youtube.com/watch?v=txs1L_dYJ9A";
+            }
+
+            return result;
 
         } catch (error) {
             console.log("AI Generation Failed/Skipped (Using Mock):", error.message);
