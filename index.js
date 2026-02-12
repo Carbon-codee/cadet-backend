@@ -48,9 +48,13 @@ app.use('/api/messages', require('./routes/messageRoutes'));
 app.use('/api/study-plan', require('./routes/studyPlanRoutes'));
 app.use('/api/resources', require('./routes/resourceRoutes'));
 
-// SEO: Sitemap route (public, no /api prefix)
+// SEO: Sitemap & Robots route (public, no /api prefix)
 const { generateSitemap } = require('./controllers/sitemapController');
 app.get('/sitemap.xml', generateSitemap);
+app.get('/robots.txt', (req, res) => {
+    res.type('text/plain');
+    res.send("User-agent: *\nAllow: /\nSitemap: https://www.marine-cadet.com/sitemap.xml");
+});
 
 
 const PORT = process.env.PORT || 5000;
