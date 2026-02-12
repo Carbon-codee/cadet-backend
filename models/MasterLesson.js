@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { generateSlug } = require('../utils/slugify');
 
 const masterLessonSchema = new mongoose.Schema({
     topic: {
@@ -6,14 +7,19 @@ const masterLessonSchema = new mongoose.Schema({
         required: true,
         unique: true,
         trim: true,
-        lowercase: true // Validate uniqueness case-insensitively, but we might store display title separately
+        lowercase: true
     },
-    displayTopic: { // Store the original casing for display
+    displayTopic: {
         type: String,
         required: true
     },
+    slug: {
+        type: String,
+        unique: true,
+        index: true
+    },
     content: {
-        type: String, // Markdown content
+        type: String,
         required: true
     },
     questions: [{
@@ -36,7 +42,29 @@ const masterLessonSchema = new mongoose.Schema({
     }
 });
 
+// Pre-save hook to generate slug
+// Pre-save hook to generate slug
+masterLessonSchema.pre('save', async function () {
+    if (this.isModified('displayTopic') || !this.slug) {
+        const { generateSlug } = require('../utils/slugify');
+
+        let baseSlug = generateSlug(this.displayTopic);
+        let slug = baseSlug;
+        let counter = 1;
+
+        // Ensure uniqueness
+        while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
+            slug = `${baseSlug}-${counter}`;
+            counter++;
+        }
+
+        this.slug = slug;
+    }
+});
+
 // Index for fast lookups
 masterLessonSchema.index({ topic: 1 });
+masterLessonSchema.index({ slug: 1 });
 
 module.exports = mongoose.model('MasterLesson', masterLessonSchema);
+

@@ -79,8 +79,12 @@ router.get('/my-applications', protect, async (req, res) => {
 
             if (!details) return null;
 
-            // Return the full internship object directly
-            return details;
+            // Return the nested structure with status info
+            return {
+                _id: app._id,
+                status: app.status,
+                internship: details
+            };
         }).filter(Boolean);
 
         res.json(results);
@@ -647,6 +651,20 @@ router.post('/upload-certificate', protect, upload.single('certificate'), async 
         await user.save();
         res.json({ message: "Sertifika eklendi.", certificates: user.certificates });
     } catch (e) { res.status(500).json({ message: "Hata oluştu." }); }
+});
+
+// @desc    Tema Tercihini Güncelle
+router.put('/profile/theme', protect, async (req, res) => {
+    try {
+        const { theme } = req.body;
+        if (!['light', 'dark'].includes(theme)) {
+            return res.status(400).json({ message: "Geçersiz tema tercihi." });
+        }
+        await User.findByIdAndUpdate(req.user._id, { themePreference: theme });
+        res.json({ message: "Tema tercihi güncellendi.", theme });
+    } catch (error) {
+        res.status(500).json({ message: "Sunucu hatası" });
+    }
 });
 
 module.exports = router;

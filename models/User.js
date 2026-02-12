@@ -91,7 +91,9 @@ const userSchema = mongoose.Schema({
     kvkkApproved: { type: Boolean, default: false },
     kvkkApprovalDate: { type: Date },
     kvkkVersion: { type: String, default: "1.0.0" },
-    kvkkIpAddress: { type: String }
+    kvkkIpAddress: { type: String },
+
+    themePreference: { type: String, enum: ['light', 'dark'], default: 'light' }
 
 }, { timestamps: true });
 

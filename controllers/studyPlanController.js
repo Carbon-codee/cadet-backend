@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Internship = require('../models/Internship');
 const StudyPlan = require('../models/StudyPlan');
+const slugify = require('slugify');
 
 // Helper to generate dummy questions (in a real app, uses AI or DB)
 const generateQuestions = (topic) => {
@@ -44,6 +45,7 @@ const generateCurriculum = (weakSubjects = []) => {
         modules.push({
             dayNumber: i + 1,
             topic: finalTopic,
+            slug: slugify(finalTopic, { lower: true, strict: true }),
             lectureContent: `## ${finalTopic}\n\n${isWeak ? '> **ÖNEMLİ:** Bu konu transkriptinizdeki notlarınıza göre **zayıf** olarak belirlenmiştir. Lütfen ekstra özen gösteriniz.\n\n' : ''}Bu bölümde ${topicName} konusunun detaylarını öğreneceksiniz.\n\n**Anahtar Kavramlar:**\n- Kavram 1: Temel Prensipler\n- Kavram 2: Operasyonel Gereklilikler\n- Kavram 3: Uygulama Standartları\n\nLütfen aşağıdaki testi çözmeden önce notlarınızı dikkatlice okuyun.`,
             isCompleted: false,
             isLocked: false,
@@ -106,31 +108,57 @@ const checkAndCreatePlan = async (req, res) => {
         }
         */
 
-        // Check if plan already exists
-        const existingPlan = await StudyPlan.findOne({ student: student._id, isActive: true });
-        if (existingPlan) {
-            return res.status(200).json({
-                message: 'Zaten aktif bir çalışma programınız var.',
-                needsPlan: true,
-                planId: existingPlan._id
+        // Check active plans count (Max 3)
+        const activePlans = await StudyPlan.find({ student: student._id, isActive: true });
+        if (activePlans.length >= 3) {
+            return res.status(400).json({
+                message: 'Maksimum 3 adet aktif çalışma planınız olabilir. Lütfen yeni bir plan oluşturmadan önce mevcut planlardan birini arşivleyin.',
+                needsPlan: false
             });
         }
 
-        // 3. Analyze Transcript for Weak Subjects
-        // Grades considered weak: FF, VF, DD, DD+, DC, DC+ (and potentially CC if strict)
-        // Let's assume failures and low passes (below CC) need work.
+        // Check if plan for THIS company already exists
+        const existingPlanForCompany = activePlans.find(p => p.targetCompany.toString() === targetCompanyId);
+        if (existingPlanForCompany) {
+            return res.status(200).json({
+                message: 'Bu hedef için zaten aktif bir planınız var.',
+                needsPlan: true,
+                planId: existingPlanForCompany._id
+            });
+        }
+
+        // 3. Analyze Transcript AND Archived Plans (AI Memory)
+        // Grades considered weak: FF, VF, DD, DD+, DC, DC+
         const weakGrades = ['FF', 'VF', 'DD', 'DD+', 'DC', 'DC+'];
         let weakSubjects = [];
 
+        // A. Transcript Analysis
         if (student.transcript && student.transcript.length > 0) {
             weakSubjects = student.transcript
                 .filter(record => weakGrades.includes(record.grade))
                 .map(record => record.courseName);
         }
 
-        console.log("Belirlenen zayıf dersler:", weakSubjects);
+        // B. Archived Plan Analysis (AI Memory)
+        // Find past plans that are archived (isActive: false)
+        const archivedPlans = await StudyPlan.find({ student: student._id, isActive: false });
 
+        let failedTopics = [];
+        archivedPlans.forEach(plan => {
+            plan.modules.forEach(mod => {
+                // Criteria: Completed but Low Score (< 50) OR Incomplete but was unlocked (abandoned)
+                const isLowScore = mod.isCompleted && mod.score < 50;
+                if (isLowScore) {
+                    failedTopics.push(`${mod.topic} (Geçmiş Başarı: %${mod.score})`);
+                }
+            });
+        });
 
+        // Merge weak subjects
+        const combinedWeaknesses = [...new Set([...weakSubjects, ...failedTopics])];
+
+        console.log("Transcript Zayıf Dersler:", weakSubjects);
+        console.log("Arşivden Gelen Zayıf Konular:", failedTopics);
 
         // 4. AI-Based Curriculum Generation
         const aiService = require('../utils/aiService');
@@ -143,7 +171,7 @@ const checkAndCreatePlan = async (req, res) => {
                 {
                     gpa: student.gpa,
                     englishLevel: student.englishLevel,
-                    weakSubjects: weakSubjects
+                    weakSubjects: combinedWeaknesses // Use the combined list
                 },
                 {
                     sector: targetCompany.companyInfo ? targetCompany.companyInfo.sector : "",
@@ -155,6 +183,7 @@ const checkAndCreatePlan = async (req, res) => {
             modulesData = curriculum.map((item, index) => ({
                 dayNumber: item.day,
                 topic: item.topic,
+                slug: slugify(item.topic, { lower: true, strict: true }),
                 lectureContent: `## ${item.topic}\n\n*Bu içerik öğrencinin profiline özel olarak hazırlanmaktadır. "Derse Başla" butonuna bastığınızda detaylı konu anlatımı yüklenecektir.*`,
                 isCompleted: false,
                 isLocked: item.day !== 1, // Only Day 1 is unlocked initially
@@ -197,17 +226,39 @@ const checkAndCreatePlan = async (req, res) => {
     }
 };
 
-// @desc    Get current study plan
-// @route   GET /api/study-plan
+// @desc    Get current study plans (Array) or specific plan by ID/Slug
+// @route   GET /api/study-plan/:slug?
 // @access  Private
 const getStudyPlan = async (req, res) => {
     try {
-        const plan = await StudyPlan.findOne({ student: req.user._id, isActive: true });
-        if (!plan) {
-            return res.status(404).json({ message: 'Aktif çalışma programı bulunamadı.' });
+        const { slug } = req.params;
+        let plan;
+
+        if (slug) {
+            const mongoose = require('mongoose');
+            if (mongoose.Types.ObjectId.isValid(slug)) {
+                plan = await StudyPlan.findOne({ _id: slug });
+            } else {
+                plan = await StudyPlan.findOne({ slug: slug });
+            }
+
+            if (plan && req.user.role === 'student' && plan.student.toString() !== req.user._id.toString()) {
+                return res.status(403).json({ message: 'Bu planı görüntüleme yetkiniz yok.' });
+            }
+            if (!plan) return res.status(404).json({ message: 'Çalışma programı bulunamadı.' });
+            res.json(plan);
+
+        } else {
+            // Default: Get ALL active plans for the Matrix Dashboard (Max 3)
+            const activePlans = await StudyPlan.find({ student: req.user._id, isActive: true })
+                .populate('targetCompany', 'name')
+                .sort({ createdAt: -1 });
+
+            res.json(activePlans);
         }
-        res.json(plan);
+
     } catch (error) {
+        console.error(error);
         res.status(500).json({ message: 'Sunucu hatası' });
     }
 };
@@ -218,7 +269,14 @@ const getStudyPlan = async (req, res) => {
 const submitDayResult = async (req, res) => {
     try {
         const { planId, dayNumber, correctCount, correctQuestionIds } = req.body;
-        const plan = await StudyPlan.findById(planId);
+        const mongoose = require('mongoose');
+
+        let plan;
+        if (mongoose.Types.ObjectId.isValid(planId)) {
+            plan = await StudyPlan.findById(planId);
+        } else {
+            plan = await StudyPlan.findOne({ slug: planId });
+        }
 
         if (!plan) return res.status(404).json({ message: 'Plan bulunamadı' });
 
@@ -274,7 +332,7 @@ const submitDayResult = async (req, res) => {
 
         // RULE 2: Mark current day as complete
         await StudyPlan.findOneAndUpdate(
-            { _id: planId, "modules.dayNumber": dayNumber },
+            { _id: plan._id, "modules.dayNumber": dayNumber },
             {
                 $set: {
                     "modules.$.isCompleted": true,
@@ -292,7 +350,7 @@ const submitDayResult = async (req, res) => {
             unlockTime.setHours(unlockTime.getHours() + 20); // 20 hours from now
 
             await StudyPlan.findOneAndUpdate(
-                { _id: planId, "modules.dayNumber": nextDayNumber },
+                { _id: plan._id, "modules.dayNumber": nextDayNumber },
                 {
                     $set: {
                         "modules.$.isLocked": true, // Keep locked until unlockDate
@@ -377,13 +435,40 @@ const getPlanHistory = async (req, res) => {
 // @access  Private
 const getContentForDay = async (req, res) => {
     try {
-        const { planId, dayNumber } = req.params;
-        const plan = await StudyPlan.findById(planId);
+        // Support both old route /:planId/day/:dayNumber and new /:planId/:lessonSlug
+        const planId = req.params.planId;
+        const identifier = req.params.lessonSlug || req.params.dayNumber;
+
+        const mongoose = require('mongoose');
+
+        let plan;
+        if (mongoose.Types.ObjectId.isValid(planId)) {
+            plan = await StudyPlan.findById(planId);
+        } else {
+            plan = await StudyPlan.findOne({ slug: planId });
+        }
+
         if (!plan) return res.status(404).json({ message: 'Plan bulunamadı' });
 
-        const module = plan.modules.find(m => m.dayNumber == dayNumber);
+        // Security check
+        if (req.user.role === 'student' && plan.student.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: 'Erişim reddedildi.' });
+        }
 
-        // Check if content needs generation (placeholder check)
+        let module;
+        // Check if identifier is strictly a number (dayNumber)
+        // Note: slug could be "1-giris", so isNaN check is usually enough if slugs contain letters
+        if (!isNaN(identifier)) {
+            module = plan.modules.find(m => m.dayNumber == identifier);
+        } else {
+            module = plan.modules.find(m => m.slug === identifier);
+        }
+
+        if (!module) return res.status(404).json({ message: 'Ders modülü bulunamadı.' });
+
+        // Add planId to response so frontend can use it for submission
+        const responseModule = module.toObject ? module.toObject() : module;
+        responseModule.planId = plan._id; // Ensure consistent ID for submissions
         // Check triggers: Placeholder text, question count low, or explicitly "AI Generated" not present in deep check
         const isPlaceholder = (module.lectureContent.includes("hazırlanmaktadır") || module.lectureContent.includes("detaylarını öğreneceksiniz")) && module.lectureContent.length < 500;
 
@@ -498,8 +583,9 @@ const getContentForDay = async (req, res) => {
             }
 
             // 4. UPDATE USER STUDY PLAN
+            // 4. UPDATE USER STUDY PLAN
             const updatedPlan = await StudyPlan.findOneAndUpdate(
-                { _id: planId, "modules.dayNumber": dayNumber },
+                { _id: plan._id, "modules.dayNumber": module.dayNumber },
                 {
                     $set: {
                         "modules.$.lectureContent": contentToUse.content,
@@ -511,13 +597,17 @@ const getContentForDay = async (req, res) => {
             );
 
             // Get the updated module with _id on questions
-            const updatedModule = updatedPlan.modules.find(m => m.dayNumber == dayNumber);
+            const updatedModule = updatedPlan.modules.find(m => m.dayNumber == module.dayNumber);
 
             // Use the updated module for response
-            return res.json(updatedModule);
+            const responseObj = updatedModule.toObject ? updatedModule.toObject() : updatedModule;
+            responseObj.planId = plan._id;
+            return res.json(responseObj);
         }
 
-        res.json(module);
+        const responseObj = module.toObject ? module.toObject() : module;
+        responseObj.planId = plan._id;
+        res.json(responseObj);
     } catch (error) {
         console.error('İçerik üretiminde hata oluştu:', error);
         res.status(500).json({ message: 'İçerik üretiminde hata oluştu.' });
@@ -595,14 +685,17 @@ const chatWithAi = async (req, res) => {
                     }
                 }
             } else if (fnName === 'get_applicants') {
-                if (user.role !== 'company') toolResult = "HATA: Yetkisiz işlem.";
-                else {
+                if (user.role !== 'company' && user.role !== 'admin') {
+                    // PRIVACY GUARD: Block students
+                    toolResult = "GİZLİLİK UYARISI: Başvuran adayların listesini sadece ilan sahibi şirket yetkilileri görüntüleyebilir.";
+                } else {
                     const int = await Internship.findById(args.internshipId).populate('applicants.user', 'name surname gpa englishLevel');
                     if (!int) toolResult = "İlan bulunamadı.";
                     else {
                         // Filter for this company
-                        if (int.company.toString() !== user._id.toString()) toolResult = "Bu ilan size ait değil.";
-                        else {
+                        if (user.role !== 'admin' && int.company.toString() !== user._id.toString()) {
+                            toolResult = "Bu ilan size ait değil.";
+                        } else {
                             let apps = int.applicants.map(a => ({
                                 name: `${a.user.name} ${a.user.surname}`,
                                 gpa: a.user.gpa,
@@ -616,22 +709,44 @@ const chatWithAi = async (req, res) => {
                     }
                 }
             } else if (fnName === 'search_internships') {
-                const Internship = require('../models/Internship'); // Ensure Internship model is imported if not already
+                const Internship = require('../models/Internship');
                 const results = await Internship.find({
                     isActive: true,
                     title: { $regex: args.query, $options: 'i' }
-                }).limit(5).select('title company location');
-                toolResult = JSON.stringify(results);
+                })
+                    .populate('company', 'name') // ENSURE POPULATE
+                    .limit(5)
+                    .select('title company location');
+
+                toolResult = JSON.stringify(results.map(r => ({
+                    title: r.title,
+                    company: r.company?.name || "Bilinmiyor", // Name not ID
+                    location: r.location,
+                    id: r._id
+                })));
             } else if (fnName === 'list_active_internships') {
                 const Internship = require('../models/Internship');
-                const results = await Internship.find({ isActive: true })
+
+                // USER REQUEST FIX: Filter out internships that user has already applied to
+                let excludeIds = [];
+                if (user.role === 'student' && user.applications && user.applications.length > 0) {
+                    // Check if application object is populated or ID string
+                    excludeIds = user.applications.map(app => {
+                        return (app.internship && app.internship._id) ? app.internship._id : app.internship;
+                    });
+                }
+
+                const results = await Internship.find({
+                    isActive: true,
+                    _id: { $nin: excludeIds } // EXCLUDE applied internships
+                })
                     .populate('company', 'name')
                     .sort({ createdAt: -1 })
                     .limit(10)
                     .select('title company location shipType'); // Select commonly needed fields
 
                 if (results.length === 0) {
-                    toolResult = "Şu anda aktif staj ilanı bulunmamaktadır.";
+                    toolResult = "Başvurmadığınız yeni bir aktif staj ilanı bulunmamaktadır.";
                 } else {
                     toolResult = JSON.stringify(results.map(r => ({
                         id: r._id,
@@ -642,22 +757,69 @@ const chatWithAi = async (req, res) => {
                     })));
                 }
             } else if (fnName === 'get_top_students') {
-                const User = require('../models/User'); // Ensure User model is imported if not already
+                const User = require('../models/User');
                 const students = await User.find({ role: 'student' })
                     .sort({ successScore: -1 }) // or gpa
                     .limit(5)
-                    .select('name surname gpa englishLevel successScore');
-                toolResult = JSON.stringify(students);
+                    .select('name surname gpa englishLevel successScore xp level'); // Added more fields
+
+                // PRIVACY PROTOCOL (KVKK)
+                if (user.role === 'student') {
+                    // Students see ANONYMIZED data for others
+                    const maskedStudents = students.map((s, idx) => {
+                        const isMe = s._id.toString() === user._id.toString();
+                        return {
+                            rank: idx + 1,
+                            name: isMe ? "SİZ (Ben)" : `Aday ${idx + 1}`, // Hide Name
+                            score: s.successScore || 0,
+                            xp: s.xp || 0,
+                            level: s.level || 1,
+                            // Hide sensitive info
+                            gpa: isMe ? s.gpa : "***",
+                            english: isMe ? s.englishLevel : "***"
+                        };
+                    });
+                    toolResult = JSON.stringify(maskedStudents);
+                } else {
+                    // Companies/Admins see full data
+                    toolResult = JSON.stringify(students);
+                }
+            } else if (fnName === 'get_my_current_study_plan') {
+                if (user.role !== 'student') {
+                    toolResult = "HATA: Bu özellik sadece öğrenciler içindir.";
+                } else {
+                    const activePlan = await StudyPlan.findOne({ student: user._id, isActive: true })
+                        .populate('targetCompany', 'name');
+
+                    if (!activePlan) {
+                        toolResult = "Şu anda aktif bir çalışma planınız bulunmuyor.";
+                    } else {
+                        const nextModule = activePlan.modules.find(m => !m.isCompleted);
+                        if (!nextModule) {
+                            toolResult = "Tebrikler! Mevcut çalışma planındaki tüm dersleri tamamladınız.";
+                        } else {
+                            const companyName = activePlan.targetCompany?.name || "Hedef Şirket";
+                            toolResult = JSON.stringify({
+                                planName: `${companyName} Hazırlık Planı`,
+                                day: nextModule.dayNumber,
+                                topic: nextModule.topic,
+                                slug: nextModule.slug || nextModule.dayNumber,
+                                planId: activePlan._id
+                            });
+                        }
+                    }
+                }
             }
 
             // 4. Second Call to AI (Summarize Tool Result)
-            // We can't easily pass the full history in this stateless setup without sending it all back and forth.
-            // But for this "Query -> Action -> Result" flow, we can just send the result as context.
             const secondResponse = await aiService.chatWithAi(
                 `Kullanıcı isteği üzerine '${fnName}' fonksiyonu çalıştırıldı. Sonuçlar: ${toolResult}.\n\n` +
-                `GÖREVİN: Bu sonuçları kullanıcıya listele. ` +
-                `ÖNEMLİ KURAL: Her staj ilanı veya başvurusu için MUTLAKA şu formatta tıklanabilir link oluştur: "İlan Başlığı [Detayları Gör](/internships/ID)". ` +
-                `Eğer sonuçlarda ID varsa link oluşturmamak yasaktır.`,
+                `GÖREVİN: Bu sonuçları kullanıcıya en faydalı olacak şekilde sun.\n` +
+                `LİNKLER (ÇOK ÖNEMLİ): \n` +
+                `- Staj İlanı için: "[Başlık - Şirket](/internships/ID)" (ID varsa)\n` +
+                `- Çalışma Planı/Ders için: "[Ders: Konu Başlığı](/study-plan/PLAN_ID/LESSON_SLUG)" (Bu formatı study plan sonuçları için kullan)\n` +
+                `- Başvuru/İlan Listesi için: Markdown tablosu veya listesi kullan.\n` +
+                `FORMAT: Markdown kullan. Başlıkları **kalın** yap.`,
                 context
             );
 
@@ -704,14 +866,27 @@ const getAllMasterLessons = async (req, res) => {
 // @desc    Get specific master lesson by ID
 // @route   GET /api/study-plan/master-lessons/:id
 // @access  Private/Admin
+// @desc    Get specific master lesson by ID or Slug
+// @route   GET /api/study-plan/master-lessons/:id
+// @access  Public (for SEO) or Private
 const getMasterLessonById = async (req, res) => {
     try {
-        if (req.user.role !== 'admin' && req.user.role !== 'company') {
-            return res.status(403).json({ message: 'Yetkisiz işlem' });
-        }
+        // SEO için public erişim gerekli, admin kontrolü kaldırıldı.
+        // if (req.user.role !== 'admin' && req.user.role !== 'company') {
+        //     return res.status(403).json({ message: 'Yetkisiz işlem' });
+        // }
 
         const MasterLesson = require('../models/MasterLesson');
-        const lesson = await MasterLesson.findById(req.params.id);
+        const mongoose = require('mongoose');
+        const { id } = req.params;
+
+        let lesson;
+
+        if (mongoose.Types.ObjectId.isValid(id)) {
+            lesson = await MasterLesson.findById(id);
+        } else {
+            lesson = await MasterLesson.findOne({ slug: id });
+        }
 
         if (!lesson) {
             return res.status(404).json({ message: 'Ders bulunamadı' });
@@ -768,6 +943,30 @@ const deleteStudentPlan = async (req, res) => {
     }
 };
 
+// @desc    Get detailed study plan for admin view
+// @route   GET /api/study-plan/admin/plan/:id
+// @access  Private/Admin
+const getStudentPlanForAdmin = async (req, res) => {
+    try {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Yetkisiz erişim' });
+        }
+
+        const plan = await StudyPlan.findById(req.params.id)
+            .populate('student', 'name surname xp level profilePicture email department gpa')
+            .populate('targetCompany', 'name sector');
+
+        if (!plan) {
+            return res.status(404).json({ message: 'Çalışma planı bulunamadı' });
+        }
+
+        res.json(plan);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Plan detayları alınırken hata oluştu' });
+    }
+};
+
 module.exports = {
     checkAndCreatePlan,
     getStudyPlan,
@@ -778,6 +977,7 @@ module.exports = {
     chatWithAi,
     getAllMasterLessons,
     getMasterLessonById,
-    getAllStudentPlans, // New export
-    deleteStudentPlan   // New export
+    getAllStudentPlans,
+    deleteStudentPlan,
+    getStudentPlanForAdmin
 };

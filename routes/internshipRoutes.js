@@ -31,13 +31,25 @@ router.get('/company/mine', protect, isCompany, async (req, res) => {
     }
 });
 
-// 3. Tek bir ilanı getir (Detay Sayfası İçin)
-router.get('/:id', protect, async (req, res) => {
+// 3. Tek bir ilanı getir (ID veya Slug ile)
+router.get('/:idOrSlug', protect, async (req, res) => {
     try {
-        const internship = await Internship.findById(req.params.id).populate('company', 'name email profilePicture');
+        const { idOrSlug } = req.params;
+        let internship;
+
+        // Check if valid ObjectID
+        const mongoose = require('mongoose');
+        if (mongoose.Types.ObjectId.isValid(idOrSlug)) {
+            internship = await Internship.findById(idOrSlug).populate('company', 'name email profilePicture');
+        } else {
+            // Find by Slug
+            internship = await Internship.findOne({ slug: idOrSlug }).populate('company', 'name email profilePicture');
+        }
+
         if (internship) res.json(internship);
         else res.status(404).json({ message: 'İlan bulunamadı.' });
     } catch (error) {
+        console.error("Get Internship Error:", error);
         res.status(500).json({ message: 'Hata' });
     }
 });

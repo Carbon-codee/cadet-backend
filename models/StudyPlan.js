@@ -10,6 +10,7 @@ const questionSchema = mongoose.Schema({
 const dayModuleSchema = mongoose.Schema({
     dayNumber: { type: Number, required: true },
     topic: { type: String, required: true },
+    slug: { type: String }, // New field for URL-friendly topic name
     lectureContent: { type: String }, // Konu anlatımı metni
     youtubeUrl: { type: String }, // YouTube video URL
     isCompleted: { type: Boolean, default: false },
@@ -32,9 +33,42 @@ const studyPlanSchema = mongoose.Schema({
     },
     startDate: { type: Date, default: Date.now },
     modules: [dayModuleSchema],
-    isActive: { type: Boolean, default: true }
+    isActive: { type: Boolean, default: true },
+    slug: { type: String, unique: true, index: true, sparse: true }
 }, {
     timestamps: true
+});
+
+// Pre-save hook to generate unique slug based on student and company names
+studyPlanSchema.pre('save', async function () {
+    if (this.isNew || !this.slug) {
+        try {
+            const User = mongoose.model('User');
+            // Fetch student and company to get names
+            const student = await User.findById(this.student);
+            const company = await User.findById(this.targetCompany);
+
+            if (student && company) {
+                const { generateSlug } = require('../utils/slugify');
+                // Create base slug: "ali-yilmaz-msc-logistics"
+                // Assuming company name might be "MSC Logistics"
+                let baseSlug = generateSlug(`${student.name}-${company.name}-hazirlik`);
+
+                let slug = baseSlug;
+                let counter = 1;
+
+                // Ensure uniqueness
+                while (await this.constructor.findOne({ slug, _id: { $ne: this._id } })) {
+                    slug = `${baseSlug}-${counter}`;
+                    counter++;
+                }
+                this.slug = slug;
+            }
+        } catch (error) {
+            console.error("Error generating slug for StudyPlan:", error);
+            // Fallback logic could be added here if needed
+        }
+    }
 });
 
 const StudyPlan = mongoose.model('StudyPlan', studyPlanSchema);

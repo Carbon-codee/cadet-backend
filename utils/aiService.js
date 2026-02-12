@@ -311,6 +311,14 @@ const aiService = {
                         description: "Başarı puanı en yüksek öğrencileri listeler.",
                         parameters: { type: "object", properties: {} }
                     }
+                },
+                {
+                    type: "function",
+                    function: {
+                        name: "get_my_current_study_plan",
+                        description: "Öğrencinin aktif çalışma planını ve bugünkü dersini getirir. 'Bugün ne çalışmalıyım?', 'Sırada ne var?' sorularında kullanılır.",
+                        parameters: { type: "object", properties: {} }
+                    }
                 }
             ];
 
@@ -323,7 +331,13 @@ const aiService = {
             4. Eğer kullanıcının isteğini yerine getirmek için bir FONKSİYON (Tool) varsa, onu çağırmaktan çekinme.
             5. Özellikle "git", "aç", "yönlendir" gibi komutlarda 'nav_to' fonksiyonunu kullan.
             6. "Başvuruları göster", "adayları listele" gibi durumlarda ilgili veri fonksiyonunu kullan.
-            7. Normal cevap verirken Markdown kullan ve listeleri düzenli tut.`;
+            7. Normal cevap verirken Markdown kullan ve listeleri düzenli tut.
+            
+            GİZLİLİK VE KVKK (ÇOK ÖNEMLİ):
+            1. Öğrencilere ASLA ve ASLA diğer öğrencilerin kişisel verilerini (GPA, Transkript, Dil Seviyesi, İsim Soyisim vb.) gösterme.
+            2. Öğrenciler sadece kendi bilgilerini görebilir.
+            3. Eğer bir öğrenci sıralama veya en iyiler listesini isterse, 'get_top_students' fonksiyonunu çağırabilirsin, ancak dönen veride diğer öğrencilerin isimleri gizlenmiş (anonim) olacaktır.
+            4. Şirketler ise işe alım süreçlerini yönetmek için aday bilgilerine erişebilir.`;
 
             const completion = await openai.chat.completions.create({
                 model: modelName,
@@ -379,7 +393,7 @@ const aiService = {
                 Öğrenci Profili:
                 - Genel Ortalaması (GPA): ${studentProfile.gpa}
                 - İngilizce Seviyesi: ${studentProfile.englishLevel}
-                - Zayıf Olduğu Dersler (Transkript Analizi): ${studentProfile.weakSubjects.join(", ") || "Belirgin bir zayıf ders yok"}
+                - Zayıf Olduğu Konular (Transkript ve Arşiv Analizi): ${studentProfile.weakSubjects.join(", ") || "Belirgin bir eksik konu yok"}
                 
                 Hedef Şirket Profili:
                 - Şirket Sektörü: ${targetCompanyInfo.sector || "Genel Denizcilik"}

@@ -61,17 +61,50 @@ router.post('/', protect, isLecturer, async (req, res) => {
     }
 });
 
-// @desc    Tek bir içeriği getir
+// @desc    Tek bir içeriği getir (ID veya Slug ile)
 router.get('/:id', protect, async (req, res) => {
     try {
-        const content = await Content.findById(req.params.id).populate('author', 'name title profilePicture department');
+        const { id } = req.params;
+        const mongoose = require('mongoose');
+
+        let content = null;
+
+        // 1. ID Kontrolü ve Arama
+        if (mongoose.Types.ObjectId.isValid(id)) {
+            // Önce Content ara
+            content = await Content.findById(id).populate('author', 'name title profilePicture department');
+
+            // Bulunamazsa Resource ara (Çünkü listeleme sayfasında Resources da var)
+            if (!content) {
+                const resource = await Resource.findById(id).populate('instructor', 'name title profilePicture department');
+                if (resource) {
+                    // Resource bulundu, Content formatına dönüştür
+                    content = {
+                        _id: resource._id,
+                        title: resource.title,
+                        content: resource.description || '',
+                        type: resource.fileType === 'youtube' ? 'Video' : resource.fileType === 'pdf' ? 'Ders Notu' : 'Belge',
+                        author: resource.instructor,
+                        createdAt: resource.createdAt,
+                        isResource: true,
+                        youtubeUrl: resource.youtubeUrl,
+                        fileUrl: resource.fileUrl,
+                        fileType: resource.fileType
+                    };
+                }
+            }
+        } else {
+            // Slug ile Arama (Sadece Content modelinde slug var)
+            content = await Content.findOne({ slug: id }).populate('author', 'name title profilePicture department');
+        }
+
         if (content) {
             res.json(content);
         } else {
             res.status(404).json({ message: 'İçerik bulunamadı.' });
         }
     } catch (error) {
-        console.error(error);
+        console.error("Get Content/Resource Error:", error);
         res.status(500).json({ message: 'Sunucu hatası.' });
     }
 });
