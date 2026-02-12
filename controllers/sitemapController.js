@@ -6,7 +6,7 @@ const MasterLesson = require('../models/MasterLesson');
 // @access  Public
 const generateSitemap = async (req, res) => {
     try {
-        const baseUrl = process.env.FRONTEND_URL || 'https://marinecadet.com';
+        const baseUrl = 'https://www.marine-cadet.com';
 
         // Fetch active internships and lessons
         const internships = await Internship.find({ isActive: true }).select('slug updatedAt');
@@ -23,11 +23,25 @@ const generateSitemap = async (req, res) => {
         xml += '    <priority>1.0</priority>\n';
         xml += '  </url>\n';
 
-        // Internships page
+        // Internships Main Page
         xml += '  <url>\n';
         xml += `    <loc>${baseUrl}/internships</loc>\n`;
         xml += '    <changefreq>daily</changefreq>\n';
         xml += '    <priority>0.9</priority>\n';
+        xml += '  </url>\n';
+
+        // Learning/Academy Main Page
+        xml += '  <url>\n';
+        xml += `    <loc>${baseUrl}/learning</loc>\n`;
+        xml += '    <changefreq>weekly</changefreq>\n';
+        xml += '    <priority>0.9</priority>\n';
+        xml += '  </url>\n';
+
+        // Auth Page (Login/Register)
+        xml += '  <url>\n';
+        xml += `    <loc>${baseUrl}/auth</loc>\n`;
+        xml += '    <changefreq>monthly</changefreq>\n';
+        xml += '    <priority>0.5</priority>\n';
         xml += '  </url>\n';
 
         // Individual internship listings
@@ -35,19 +49,23 @@ const generateSitemap = async (req, res) => {
             if (internship.slug) {
                 xml += '  <url>\n';
                 xml += `    <loc>${baseUrl}/internships/${internship.slug}</loc>\n`;
-                xml += `    <lastmod>${internship.updatedAt.toISOString()}</lastmod>\n`;
+                if (internship.updatedAt) {
+                    xml += `    <lastmod>${internship.updatedAt.toISOString()}</lastmod>\n`;
+                }
                 xml += '    <changefreq>weekly</changefreq>\n';
                 xml += '    <priority>0.8</priority>\n';
                 xml += '  </url>\n';
             }
         });
 
-        // Lessons/Courses
+        // Lessons/Courses (Repository/Learning Detail)
         lessons.forEach(lesson => {
             if (lesson.slug) {
                 xml += '  <url>\n';
-                xml += `    <loc>${baseUrl}/lessons/${lesson.slug}</loc>\n`;
-                xml += `    <lastmod>${lesson.lastUpdated.toISOString()}</lastmod>\n`;
+                xml += `    <loc>${baseUrl}/learning/${lesson.slug}</loc>\n`;
+                if (lesson.lastUpdated) {
+                    xml += `    <lastmod>${new Date(lesson.lastUpdated).toISOString()}</lastmod>\n`;
+                }
                 xml += '    <changefreq>monthly</changefreq>\n';
                 xml += '    <priority>0.7</priority>\n';
                 xml += '  </url>\n';
