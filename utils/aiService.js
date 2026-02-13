@@ -1,64 +1,48 @@
 const OpenAI = require("openai");
 const yts = require('yt-search');
 
-// Fallback logic if no API key is provided
-const SIMULATED_DELAY = 1500;
-
-// --- HELPER: REAL YOUTUBE SEARCH WITH QUALITY FILTER ---
+// --- HELPER: REAL YOUTUBE SEARCH (GELİŞTİRİLMİŞ & FİLTRELİ) ---
 const getPerfectVideo = async (aiGeneratedTopic) => {
     try {
-        // 1. AI'dan gelen çok spesifik arama terimi
-        const searchQuery = `${aiGeneratedTopic} technical training maritime lecture`;
+        // Arama terimine 'technical', 'animation', 'lecture' ekleyerek eğitim kalitesini artırıyoruz
+        const searchQuery = `${aiGeneratedTopic} maritime technical training lecture animation`;
         console.log(`[YouTube Search] Searching for: ${searchQuery}`);
 
-        // 2. Güvenilir kanallar (Bunlardan gelirse yapışıyoruz)
         const trustedChannels = [
-            "Maritime Training",
-            "Seagull",
-            "Videotel",
-            "Wartsila",
-            "Naval Arch",
-            "Marine Online",
-            "IMO"
+            "Maritime Training", "Seagull", "Videotel", "Wartsila", "Naval Arch",
+            "Marine Online", "IMO", "Chief MAKOi", "Casual Navigation",
+            "Marine Engineering", "Teikoku Databank", "Alfa Laval", "MAN Energy Solutions",
+            "Dr. Oliver", "Steering Mariners", "USCS", "Merchant Navy"
         ];
 
         const r = await yts(searchQuery);
 
-        // 3. Videoları puanlayarak filtrele
+        // Videoları puanlayarak en iyisini seç
         const bestVideo = r.videos.find(v => {
             const title = v.title.toLowerCase();
             const author = v.author.name.toLowerCase();
 
-            // Şirket veya Eğitim kanalıysa +10 puan (Güvenilir kanal kontrolü)
+            // Güvenilir kanalsa öncelik ver
             const isTrusted = trustedChannels.some(ch => author.includes(ch.toLowerCase()));
 
-            // Çöp videoları engelle
-            const blacklist = ['game', 'simulator', 'funny', 'accident', 'facia', 'minecraft', 'roblox', 'vlog', 'reaction', 'shorts'];
+            // Çöp videoları (Oyun, şaka, kısa video) engelle
+            const blacklist = ['game', 'simulator', 'funny', 'accident', 'facia', 'fail', 'minecraft', 'roblox', 'vlog', 'reaction', 'shorts', 'tiktok', 'ship crash'];
             const isNotTrash = !blacklist.some(w => title.includes(w));
 
-            // Eğitim videosu genelde 4-20 dk olur (240 - 1200 sn)
-            // Ancak güvendiğimiz kanalların kısa/uzun videoları da değerlidir.
-            const isRightDuration = v.seconds > 240 && v.seconds < 1200;
+            // Eğitim videosu süresi (3 dk - 60 dk arası ideal, teknik videolar uzun olabilir)
+            const isRightDuration = v.seconds > 180 && v.seconds < 3600;
 
-            // Güvenilir kanalsa süreye bile bakmayabiliriz ama yine de çok kısa olmasın (> 2 dk)
-            if (isTrusted && v.seconds > 120) return true;
-
+            if (isTrusted) return true; // Güvenilir kanalsa direkt al
             return isNotTrash && isRightDuration;
         });
 
         if (bestVideo) {
-            console.log(`[YouTube Search] Found PERFECT video: ${bestVideo.title} from ${bestVideo.author.name}`);
             return bestVideo.url;
         }
 
-        // Fallback: Return top result if nothing perfect found (better than nothing)
-        // But still filter for obvious trash
-        if (r.videos.length > 0) {
-            console.log(`[YouTube Search] Perfect match not found, using top result.`);
-            return r.videos[0].url;
-        }
+        if (r.videos.length > 0) return r.videos[0].url; // En iyi eşleşme
 
-        return "https://www.youtube.com/user/IMOHQ";
+        return "https://www.youtube.com/user/IMOHQ"; // Fallback
 
     } catch (e) {
         console.error("[YouTube Search] Error:", e.message);
@@ -66,196 +50,238 @@ const getPerfectVideo = async (aiGeneratedTopic) => {
     }
 };
 
-const getMockContent = (topic) => {
-    return {
-        youtubeUrl: "https://www.youtube.com/watch?v=txs1L_dYJ9A", // Default fallback
-        content: `## ${topic} (AI Generated)\n\nBu içerik, yapay zeka servisine erişilemediği için **simüle edilmiştir**.\n\n### Temel Bilgiler\n${topic}, denizcilik dünyasında kritik bir öneme sahiptir. Profesyonel bir zabit olarak bu konunun detaylarına hakim olmanız gerekir.\n\n### Önemli Noktalar\n- **Kural 1:** Daima güvenliği ön planda tutun.\n- **Kural 2:** Uluslararası regülasyonlara (IMO) uyun.\n- **Kural 3:** Ekip iletişimi hayati önem taşır.\n\n> "Deniz sakin olduğunda herkes kaptan kesilir."\n\nLütfen aşağıdaki testi dikkatlice çözünüz.`,
-        questions: [
-            {
-                questionText: `${topic} ile ilgili en önemli öncelik nedir?`,
-                options: ["Güvenlik", "Hız", "Maliyet", "Konfor"],
-                correctAnswer: "Güvenlik",
-                difficulty: "Kolay"
-            },
-            {
-                questionText: "Aşağıdakilerden hangisi bu konuda yetkili kurumdur?",
-                options: ["IMO", "FIFA", "UNESCO", "NATO"],
-                correctAnswer: "IMO",
-                difficulty: "Kolay"
-            },
-            {
-                questionText: "Acil durumda ilk yapılması gereken nedir?",
-                options: ["Sakin kalmak ve prosedürü uygulamak", "Gemiyi terk etmek", "Aileyi aramak", "Yemek yemek"],
-                correctAnswer: "Sakin kalmak ve prosedürü uygulamak",
-                difficulty: "Orta"
-            },
-            {
-                questionText: "Bu konu hangi sözleşme kapsamındadır?",
-                options: ["SOLAS", "Kira Sözleşmesi", "İş Kanunu", "Medeni Kanun"],
-                correctAnswer: "SOLAS",
-                difficulty: "Orta"
-            }
-        ]
-    };
-};
-
-// --- HELPER: ROBUST JSON PARSER WITH RETRY ---
+// --- HELPER: ROBUST JSON PARSER (RETRY MEKANİZMALI) ---
 const generateJsonWithRetry = async (openai, modelName, messages, maxRetries = 3) => {
-    let lastError = null;
-
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-            if (attempt > 1) {
-                console.log(`[AI Retry] JSON parsing failed, retrying (${attempt}/${maxRetries})...`);
-            }
-
             const completion = await openai.chat.completions.create({
                 model: modelName,
                 messages: messages,
-                response_format: { type: "json_object" }, // Enforce JSON mode
+                response_format: { type: "json_object" },
+                temperature: 0.8, // Yaratıcılık ve detay için yüksek tutuyoruz
+                max_tokens: 4096 // İçeriğin yarıda kesilmemesi için limit
             });
 
             const text = completion.choices[0].message.content;
-
-            // 1. Basic Cleanup (Should be clean JSON from OpenAI usually)
-            let cleanedText = text.trim();
-
-            // 2. Try Parsing directly
-            try {
-                return JSON.parse(cleanedText);
-            } catch (parseError) {
-                throw new Error(`JSON Parse Error: ${parseError.message}`);
-            }
-
+            return JSON.parse(text);
         } catch (error) {
-            lastError = error;
             console.error(`AI Attempt ${attempt} Failed:`, error.message);
+            if (attempt === maxRetries) throw error;
         }
     }
-
-    throw lastError || new Error("AI Generation failed after max retries");
 };
 
-
 const aiService = {
+    // 1. SINIRSIZ İÇERİK OLUŞTURMA (MASTERPIECE CONTENT & 20 SORU)
     generateHighQualityContent: async (topic, weakSubjectMode) => {
         try {
             const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
             if (!apiKey) throw new Error("No OpenAI API Key configured");
 
             const openai = new OpenAI({ apiKey: apiKey });
-            // Using gpt-4o as requested for high quality
+            // İçerik kalitesi için GPT-4o şart
             const modelName = "gpt-4o";
 
-            // SYSTEM PROMPT - Youtube URL removed from AI tasks
-            const systemPrompt = `Sen, Uluslararası Denizcilik Örgütü (IMO) standartlarına hakim, STCW sertifikalı uzman bir Denizcilik Eğitmenisin.
-                
-                GÖREVİN:
-                1. "videoSearchTerm": Bu konuyla ilgili EN İYİ YouTube videosunu bulmamızı sağlayacak İNGİLİZCE teknik arama terimi.
-                   - Örnek: "Centrifugal Pump Overhaust" veya "Colreg Rule 19 explanation".
-                   - Sadece konuyu değil, ne aradığını belirten teknik bir terim olsun.
+            // SİSTEM PROMPTU: AI'YA "AKADEMİSYEN & PROFESÖR" ROLÜ VERİYORUZ
+            const systemPrompt = `Sen Dünya Denizcilik Üniversitesi'nde (WMU) ders veren kıdemli bir Profesör, Uzak Yol Kaptanı (Master Mariner) ve Başmühendissin (Chief Engineer).
 
-                2. "content": Verilen konu hakkında Markdown formatında AKADEMİK, TEKNİK ve DOĞRUDAN STCW MÜFREDATINA UYGUN ders notları hazırla.
-                   - **HEDEF:** En az 1500 kelime, derinlemesine teknik bilgi.
-                   - Yüzeysel geçme, detaylara in (Örn: Pompa karakteristikleri, yasal dayanaklar, formüller).
-                   - Gerçek hayattan kaza raporları veya vaka analizleri (Case Studies) ekle.
-                   - Markdown formatını zengin kullan: 
-                     * Başlıklar (##, ###)
-                     * Madde işaretli listeler
-                     * Numaralı listeler
-                     * Tablolar
-                     * Alıntılar (>)
-                     * Kalın ve italik vurgular
-                   - **ÖNEMLİ:** Mermaid diyagramları KULLANMA. Bunun yerine süreçleri madde işaretli veya numaralı listelerle açıkla.
-                   - Karmaşık verileri tablolarla sun.
+            GÖREVİN:
+            1. Verilen konu hakkında, bir denizcilik öğrencisinin o konuyu A'dan Z'ye, tüm teknik detaylarıyla, uluslararası regülasyonlarla ve pratik uygulamalarla öğrenmesini sağlayacak **KAPSAMLI BİR AKADEMİK DERS KİTABI BÖLÜMÜ** yazmak.
+            2. Bu konuyla ilgili **KESİNLİKLE VE EKSİKSİZ 20 (YİRMİ) ADET** Sınav Sorusu hazırlamak.
 
-                3. "questions": TAM OLARAK 20 ADET Özgün Soru Hazırla.
-                   - Sorular Bloom Taksonomisi'ne göre dağıtılmalı:
-                     - %30 Kolay (Hatırlama/Bilgi)
-                     - %40 Orta (Kavrama/Uygulama)
-                     - %30 Zor (Analiz/Değerlendirme - Vaka bazlı)
-                   - Şıkları (A, B, C, D) rastgele dağıt.
-                   - Her soru için "difficulty" alanını belirt: 'Kolay', 'Orta', 'Zor'.
+            ASLA YAPMAMAN GEREKENLER:
+            - Asla özet geçme.
+            - Asla "Genel bilgi budur" deyip bırakma.
+            - Asla yüzeysel olma.
 
-                Çıktı Formatı SADECE geçerli bir JSON olmalıdır:
-                {
-                    "videoSearchTerm": "Technical English Search Term",
-                    "content": "# Konu Başlığı\\n\\n## Giriş...",
-                    "questions": [
-                        { 
-                            "questionText": "Soru metni...", 
-                            "options": ["Şık 1", "Şık 2", "Şık 3", "Şık 4"], 
-                            "correctAnswer": "Şık 1" (Doğru şıkkın tam metni),
-                            "difficulty": "Zor"
-                        }
-                    ]
-                }
+            İÇERİK BEKLENTİSİ (SINIRSIZ DETAY):
+            1. **Derinlik:** Konuyu en ince ayrıntısına kadar (mikron seviyesinde teknik bilgi, formüller, hesaplamalar, termodinamik döngüler, seyir üçgenleri) anlat.
+            2. **Otorite (Regülasyonlar):** Anlatırken sürekli IMO Konvansiyonlarına (SOLAS, MARPOL, STCW, LSA Code, FSS Code, COLREG, ISM) madde madde referans ver (Örn: "SOLAS Ch-II/2 Reg 10.5.2 uyarınca...").
+            3. **Gemi Tipi & Operasyon:** Konunun farklı gemi tiplerindeki (Tanker, Dökme, Konteyner, LNG) spesifik uygulamalarını karşılaştır.
+            4. **Gerçek Hayat & Tecrübe:** "Sahada/Makine dairesinde işler kitaplardaki gibi yürümez" dediğin noktaları belirt. Pratik ipuçları, "Chief'in Sırları", yaşanmış kaza analizleri (Case Studies) ekle.
+            5. **Format:** Markdown'ı sonuna kadar kullan. Tablolar, Uyarı Kutuları (Blockquotes), Kontrol Listeleri (Checklists) ve Adım Adım Prosedürler oluştur.
+
+            SORU STANDARDI (GASM / COC SINAVI):
+            - **SAYI:** Tam olarak 20 adet soru olacak.
+            - **TÜR:** Sorular ezber değil, **MUHAKEME, KRİZ YÖNETİMİ ve ARIZA TESPİTİ** üzerine olmalı.
+            - **ZORLUK:** 
+              - 5 Adet KOLAY (Temel Bilgi)
+              - 10 Adet ORTA (Operasyonel)
+              - 5 Adet ZOR (Yönetimsel/Kriz - Çeldiricili)
+            - **ŞIKLAR:** 4 veya 5 şık olsun.
+
+            ÇIKTI FORMATI (JSON):
+            {
+                "videoSearchTerm": "Konuyla ilgili spesifik teknik animasyon veya ders videosu için İngilizce teknik arama terimi (Örn: 'Marine Diesel Engine Fuel Injector overhaul animation')",
+                "content": "Markdown formatında, en az 1500-2500 kelimelik, başlıklar, tablolar ve derin teknik anlatım içeren ders metni.",
+                "questions": [
+                    { 
+                        "questionText": "Senaryo bazlı zor soru...", 
+                        "options": ["A", "B", "C", "D"], 
+                        "correctAnswer": "Doğru Şık (Tam Metin)",
+                        "difficulty": "Zor" // 'Kolay', 'Orta', 'Zor'
+                    }
+                    ... (Burada toplam 20 obje olmalı)
+                ]
+            }`;
+
+            const userPrompt = `
+            DERS KONUSU: "${topic}"
+            
+            TALİMAT: Bu konuyu bir Başmühendis veya Kaptanın el kitabı olacak seviyede, teknik verilerle, yasal dayanaklarla ve operasyonel prosedürlerle donatarak anlat. 
+            Eğer konu teknikse (Motor, Elektrik vs.) çalışma prensibini, parçalarını, bakım (overhaul) limitlerini ve arıza bulma (troubleshooting) adımlarını detaylandır.
+            Eğer konu operasyonel ise (Seyir, Yük vs.) checklistleri, risk analizlerini ve acil durum prosedürlerini ekle.
+            Ardından 20 adet GASM standartlarında soruyu ekle.
             `;
 
-            const userPrompt = `Konu: "${topic}"
-            Mod: ${weakSubjectMode ? "Detaylı ve açıklayıcı (Öğrenci bu konuda zayıf, ekstra örnekler ver)" : "Profesyonel teknik anlatım"}.
-            Lütfen içerik, teknik arama terimi ve soruları eksiksiz üret.`;
-
-            const messages = [
+            const result = await generateJsonWithRetry(openai, modelName, [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: userPrompt }
-            ];
+            ]);
 
-            // 1. Generate Content from AI
-            const result = await generateJsonWithRetry(openai, modelName, messages);
-
-            // 2. Fetch Real YouTube Video (Independent Step)
-            // Use the AI-generated specific search term, or fallback to topic
-            const searchTerm = result.videoSearchTerm || topic;
-            const realVideoUrl = await getPerfectVideo(searchTerm);
-
-            // 3. Attach Video URL to Result
-            if (realVideoUrl) {
-                result.youtubeUrl = realVideoUrl;
-            } else {
-                // Fallback to a generic maritime channel if search fails
-                result.youtubeUrl = "https://www.youtube.com/watch?v=txs1L_dYJ9A";
-            }
+            // Video Bulma
+            const videoUrl = await getPerfectVideo(result.videoSearchTerm || topic);
+            result.youtubeUrl = videoUrl;
 
             return result;
 
         } catch (error) {
-            console.log("AI Generation Failed/Skipped (Using Mock):", error.message);
-            return getMockContent(topic);
+            console.error("AI Content Error:", error);
+            // Hata olsa bile kullanıcıyı boş döndürme
+            return {
+                content: `## Sistem Hatası\n\nYüksek kaliteli içerik oluşturulurken bir sorun yaşandı. Lütfen daha sonra tekrar deneyin.\n\n*Hata Kodu: ${error.message}*`,
+                questions: [],
+                youtubeUrl: "https://www.youtube.com/user/IMOHQ"
+            };
         }
     },
 
+    // 2. MÜFREDAT OLUŞTURMA (BÖLÜM DUYARLI & DETAYLI)
+    generateStudyCurriculum: async (studentProfile, targetCompanyInfo) => {
+        try {
+            const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
+            if (!apiKey) throw new Error("No OpenAI API Key configured");
+
+            const openai = new OpenAI({ apiKey: apiKey });
+            const modelName = "gpt-4o";
+
+            // BÖLÜM TESPİTİ (GÜVERTE Mİ MAKİNE Mİ?)
+            const dept = studentProfile.department ? studentProfile.department.toLowerCase() : "";
+            const isEngine = dept.includes("makine") || dept.includes("engine") || dept.includes("mechanic");
+
+            let roleDescription = "";
+            let focusTopics = "";
+
+            if (isEngine) {
+                // MAKİNE MÜFREDATI (ENGINE DEPT)
+                roleDescription = "Sen tecrübeli bir Başmühendis (Chief Engineer) ve Eğitim Planlamacısısın.";
+                focusTopics = `
+                Konular KESİNLİKLE "Gemi Makineleri İşletme Mühendisliği" (Engine Dept) müfredatına uygun olmalıdır:
+                - Gemi Ana Makineleri (2/4 Zamanlı Dizeller, Yanma, Püskürtme, Yağlama)
+                - Gemi Yardımcı Makineleri (Pompalar, Kompresörler, Seperatörler, Evaporatörler)
+                - Termodinamik ve Isı Transferi
+                - Gemi Elektriği (Alternatörler, Senkronizasyon, Dağıtım, Yüksek Voltaj)
+                - Otomasyon ve Kontrol Sistemleri
+                - Yakıt ve Yağ Analizleri, Kimyasallar
+                - Deniz Hukuku (Makine ile ilgili MARPOL Annex I-VI, SOLAS, ISM)
+                - Bakım Tutum (PMS), Overhaul Prosedürleri, Arıza Tespiti
+                - Makine Dairesi Simülatörü (ERM) Senaryoları
+                `;
+            } else {
+                // GÜVERTE MÜFREDATI (DECK DEPT)
+                roleDescription = "Sen tecrübeli bir Uzak Yol Kaptanı (Master Mariner) ve Eğitim Planlamacısısın.";
+                focusTopics = `
+                Konular KESİNLİKLE "Deniz Ulaştırma İşletme Mühendisliği" (Deck Dept) müfredatına uygun olmalıdır:
+                - Seyir (Navigation) & Elektronik Seyir (ECDIS, Radar/ARPA)
+                - Gemi Stabilitesi, Trim ve Draft Survey, Yükleme Hesapları
+                - Deniz Hukuku & Uluslararası Sözleşmeler (COLREG, SOLAS, MARPOL, STCW)
+                - Gemi Manevrası ve Elleçleme
+                - Denizcilik İngilizcesi (SMCP) ve Haberleşme (GMDSS)
+                - Meteoroloji ve Oşinografi
+                - Köprüüstü Kaynak Yönetimi (BRM)
+                - Güvenlik (ISPS) ve Acil Durumlar
+                `;
+            }
+
+            const systemPrompt = `${roleDescription}
+            GÖREVİN: Öğrenciyi hedeflediği şirketin (${targetCompanyInfo.sector}) sınavlarına ve mülakatlarına, ayrıca GASM sınavlarına %100 hazır hale getirecek 60 günlük, profesyonel bir yol haritası çizmek.
+
+            KURALLAR:
+            1. **Bölüm:** Öğrenci **${isEngine ? "MAKİNE (ENGINE)" : "GÜVERTE (DECK)"}** sınıfındadır. Konular buna göre, o bölümün en zor ve en kritik derslerinden seçilmelidir.
+            2. **Spesifiklik:** Asla genel başlık atma. 
+               - "Motorlar" YAZMA -> "2 Zamanlı Dizel Motorlarda Piston Ring Aşınması ve Ölçümü" YAZ.
+               - "Seyir" YAZMA -> "Büyük Daire Seyrinde Vertex Noktası Hesabı" YAZ.
+            3. **Akış:** Kolaydan zora değil, **Operasyonelden Yönetimsel** seviyeye doğru ilerle.
+            4. **Şirket:** Hedef şirket ${targetCompanyInfo.sector} tipindedir. Buna uygun konular ekle (Örn: Tanker ise IGS/COW, Konteyner ise Lashing/Istif).
+
+            ÇIKTI FORMATI (JSON):
+            {
+                "curriculum": [
+                    { "day": 1, "topic": "Dersin Tam Teknik Başlığı" },
+                    { "day": 2, "topic": "..." },
+                    ... (60 güne kadar)
+                ]
+            }`;
+
+            const userPrompt = `
+            Öğrenci Bölümü: ${studentProfile.department}
+            Zayıf Yönleri: ${studentProfile.weakSubjects.join(", ") || "Genel Tekrar"}
+            Hedef Şirket: ${targetCompanyInfo.sector} (${targetCompanyInfo.about})
+            
+            Lütfen "Genel Eğitim" gibi boş dersler oluşturma. Her günün konusu bir kitap bölümü başlığı gibi teknik ve doyurucu olsun. 60 günü doldur.`;
+
+            const result = await generateJsonWithRetry(openai, modelName, [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ]);
+
+            let finalArray = result.curriculum || [];
+
+            // Eğer AI 60 günü dolduramazsa, eksikleri kaliteli başlıklarla tamamla
+            if (finalArray.length < 60) {
+                const missingCount = 60 - finalArray.length;
+                for (let i = 0; i < missingCount; i++) {
+                    finalArray.push({
+                        day: finalArray.length + 1,
+                        topic: `İleri Seviye ${isEngine ? 'Makine Operasyonları' : 'Seyir Teknikleri'} ve Vaka Analizi - Bölüm ${i + 1}`
+                    });
+                }
+            }
+            return finalArray;
+
+        } catch (error) {
+            console.error("Curriculum Error:", error);
+            // Fallback: Hata durumunda bile bölüm farkındalığı olsun
+            return Array.from({ length: 60 }, (_, i) => ({
+                day: i + 1,
+                topic: `Denizcilik Eğitimi (Lütfen Yeniden Plan Oluşturun) - Gün ${i + 1}`
+            }));
+        }
+    },
+
+    // 3. CHATBOT (GÜVENLİK VE GİZLİLİK ODAKLI)
     chatWithAi: async (message, context = "") => {
         try {
             const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
             if (!apiKey) throw new Error("No OpenAI API Key configured");
 
             const openai = new OpenAI({ apiKey: apiKey });
-            const modelName = "gpt-4o-mini";
+            const modelName = "gpt-4o";
 
             const tools = [
                 {
                     type: "function",
                     function: {
                         name: "nav_to",
-                        description: "Kullanıcıyı uygulamanın içinde belirli bir sayfaya yönlendirir. Örneğin 'ilanlara git', 'profilime git' dendiğinde kullanılır.",
-                        parameters: {
-                            type: "object",
-                            properties: {
-                                path: {
-                                    type: "string",
-                                    description: "Gidilecek URL yolu (Örn: '/internships', '/profile', '/company/my-internships')"
-                                }
-                            },
-                            required: ["path"]
-                        }
+                        description: "Kullanıcıyı sayfaya yönlendirir.",
+                        parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }
                     }
                 },
                 {
                     type: "function",
                     function: {
                         name: "get_my_internships",
-                        description: "Şirketin kendi oluşturduğu staj ilanlarını listeler.",
+                        description: "Şirketin ilanlarını listeler.",
                         parameters: { type: "object", properties: {} }
                     }
                 },
@@ -263,7 +289,7 @@ const aiService = {
                     type: "function",
                     function: {
                         name: "get_my_applications",
-                        description: "Öğrencinin kendi yaptığı staj başvurularını listeler.",
+                        description: "Öğrencinin başvurularını listeler.",
                         parameters: { type: "object", properties: {} }
                     }
                 },
@@ -271,13 +297,10 @@ const aiService = {
                     type: "function",
                     function: {
                         name: "get_applicants",
-                        description: "Belirli bir staj ilanına başvuran öğrencileri getirir.",
+                        description: "İlana başvuranları listeler. (Sadece Şirket Yetkilisi Erişebilir)",
                         parameters: {
                             type: "object",
-                            properties: {
-                                internshipId: { type: "string", description: "İlanın veritabanı ID'si" },
-                                sortBy: { type: "string", enum: ["gpa", "english", "date"], description: "Sıralama kriteri" }
-                            },
+                            properties: { internshipId: { type: "string" }, sortBy: { type: "string" } },
                             required: ["internshipId"]
                         }
                     }
@@ -286,21 +309,15 @@ const aiService = {
                     type: "function",
                     function: {
                         name: "search_internships",
-                        description: "Staj ilanlarında belirli bir kelimeye göre arama yapar.",
-                        parameters: {
-                            type: "object",
-                            properties: {
-                                query: { type: "string", description: "Aranacak kelime (pozisyon, şirket adı vs.)" }
-                            },
-                            required: ["query"]
-                        }
+                        description: "Staj ilanı arar.",
+                        parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] }
                     }
                 },
                 {
                     type: "function",
                     function: {
                         name: "list_active_internships",
-                        description: "Sistemdeki tüm aktif staj ilanlarını listeler. Kullanıcı genel olarak 'ilan var mı', 'stajları göster' dediğinde kullanılır.",
+                        description: "Aktif staj ilanlarını listeler.",
                         parameters: { type: "object", properties: {} }
                     }
                 },
@@ -308,7 +325,7 @@ const aiService = {
                     type: "function",
                     function: {
                         name: "get_top_students",
-                        description: "Başarı puanı en yüksek öğrencileri listeler.",
+                        description: "Başarılı öğrencileri listeler. (Öğrenci ise isimler gizlenir)",
                         parameters: { type: "object", properties: {} }
                     }
                 },
@@ -316,123 +333,40 @@ const aiService = {
                     type: "function",
                     function: {
                         name: "get_my_current_study_plan",
-                        description: "Öğrencinin aktif çalışma planını ve bugünkü dersini getirir. 'Bugün ne çalışmalıyım?', 'Sırada ne var?' sorularında kullanılır.",
+                        description: "Öğrencinin aktif planını ve derslerini getirir.",
                         parameters: { type: "object", properties: {} }
                     }
                 }
             ];
 
-            const systemInstruction = `Sen 'Kaptan AI' adında yardımsever, bilge ve profesyonel bir denizcilik asistanısın.
+            const systemInstruction = `Sen 'Kaptan AI' adında profesyonel bir denizcilik asistanısın.
             
-            GÖREVİN:
-            1. Sen bir 'Platform Asistanı'sın.
-            2. Sana verilen "SİTE BİLGİLERİ"ni kullanabilirsin.
-            3. Site dışı genel bilgileri (hava durumu vs) cevaplama.
-            4. Eğer kullanıcının isteğini yerine getirmek için bir FONKSİYON (Tool) varsa, onu çağırmaktan çekinme.
-            5. Özellikle "git", "aç", "yönlendir" gibi komutlarda 'nav_to' fonksiyonunu kullan.
-            6. "Başvuruları göster", "adayları listele" gibi durumlarda ilgili veri fonksiyonunu kullan.
-            7. Normal cevap verirken Markdown kullan ve listeleri düzenli tut.
+            GÖREVİN: 
+            Kullanıcının sorularına net, doğru ve yardımcı cevaplar vermek.
             
-            GİZLİLİK VE KVKK (ÇOK ÖNEMLİ):
-            1. Öğrencilere ASLA ve ASLA diğer öğrencilerin kişisel verilerini (GPA, Transkript, Dil Seviyesi, İsim Soyisim vb.) gösterme.
-            2. Öğrenciler sadece kendi bilgilerini görebilir.
-            3. Eğer bir öğrenci sıralama veya en iyiler listesini isterse, 'get_top_students' fonksiyonunu çağırabilirsin, ancak dönen veride diğer öğrencilerin isimleri gizlenmiş (anonim) olacaktır.
-            4. Şirketler ise işe alım süreçlerini yönetmek için aday bilgilerine erişebilir.`;
+            GİZLİLİK KURALLARI: 
+            1. Öğrencilere ASLA başkalarının kişisel verilerini (isim, not, başvuru durumu) gösterme.
+            2. Şirketler aday bilgilerini görebilir.
+            3. Yanıtlarında Markdown kullan (Kalın, Liste, Tablo).
+            
+            STİL: 
+            Denizcilik terminolojisine hakim, saygılı ve çözüm odaklı ol.`;
 
             const completion = await openai.chat.completions.create({
                 model: modelName,
                 messages: [
                     { role: "system", content: systemInstruction },
-                    { role: "user", content: `SİTE BİLGİLERİ:\n${context ? context : "(Veri yok)"}\n\nKullanıcı Sorusu: ${message}` }
+                    { role: "user", content: `SİTE BİLGİLERİ:\n${context}\n\nSORU: ${message}` }
                 ],
                 tools: tools,
                 tool_choice: "auto",
             });
 
-            // Return the full message object (content + tool_calls)
             return completion.choices[0].message;
 
         } catch (error) {
-            console.error("DEBUG: Chat Error Details:", error.message);
-            return { content: `(HATA: ${error.message})\n\nOpenAI API ile bağlantı kurulamadı.` };
-        }
-    },
-
-    generateStudyCurriculum: async (studentProfile, targetCompanyInfo) => {
-        try {
-            const apiKey = process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.trim() : "";
-            if (!apiKey) throw new Error("No OpenAI API Key configured");
-
-            const openai = new OpenAI({ apiKey: apiKey });
-            const modelName = "gpt-4o-mini";
-
-            const systemPrompt = `Sen uzman bir Denizcilik Kariyer Danışmanısın.
-                GÖREVİN:
-                Bir öğrencinin hedef şirkete seçilebilmesi için 60 günlük (Gün 1'den Gün 60'a kadar SIRALI), kişiselleştirilmiş bir çalışma müfredatı hazırla.
-                
-                KURALLAR:
-                1. Öğrencinin zayıf olduğu konulara ilk haftalarda ağırlık ver.
-                2. Şirketin sektörüne uygun teknik konular ekle (Örn: Tanker ise tanker operasyonları).
-                3. İngilizce seviyesi düşükse (B2 altı), her haftaya Denizcilik İngilizcesi ekle.
-                4. Kariyer ve mülakat hazırlığı konuları da ekle.
-                5. GÜNLER KESİNLİKLE 1'den 60'a KADAR SIRALI OLMALIDIR.
-
-                ÇIKTI FORMATI:
-                SADECE geçerli bir JSON OBJESİ olmalıdır. 
-                Root "curriculum" anahtarı olmalı:
-                {
-                    "curriculum": [
-                        { "day": 1, "topic": "Konu Başlığı" },
-                        { "day": 2, "topic": "Konu Başlığı" },
-                         ...
-                    ]
-                }
-            `;
-
-            const userPrompt = `
-                Öğrenci Profili:
-                - Genel Ortalaması (GPA): ${studentProfile.gpa}
-                - İngilizce Seviyesi: ${studentProfile.englishLevel}
-                - Zayıf Olduğu Konular (Transkript ve Arşiv Analizi): ${studentProfile.weakSubjects.join(", ") || "Belirgin bir eksik konu yok"}
-                
-                Hedef Şirket Profili:
-                - Şirket Sektörü: ${targetCompanyInfo.sector || "Genel Denizcilik"}
-                - Şirket Hakkında: ${targetCompanyInfo.about || "Standart uluslararası denizcilik şirketi"}
-            `;
-
-            const messages = [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt }
-            ];
-
-            const resultJson = await generateJsonWithRetry(openai, modelName, messages);
-
-            // Normalize result to array
-            if (!resultJson) throw new Error("Could not parse JSON");
-
-            let finalArray = [];
-            if (resultJson.curriculum && Array.isArray(resultJson.curriculum)) finalArray = resultJson.curriculum;
-            else if (Array.isArray(resultJson)) finalArray = resultJson;
-            else {
-                // Trying to find array in object values
-                const values = Object.values(resultJson);
-                const possibleArray = values.find(v => Array.isArray(v));
-                if (possibleArray) finalArray = possibleArray;
-            }
-
-            if (finalArray.length === 0) {
-                return [{ day: 1, topic: "Genel Denizcilik (AI Plan Ayrıştırılamadı - Lütfen Yeniden Deneyin)" }];
-            }
-
-            return finalArray;
-
-        } catch (error) {
-            console.error("Curriculum Gen Error:", error.message);
-            // Fallback
-            return Array.from({ length: 60 }, (_, i) => ({
-                day: i + 1,
-                topic: `Denizcilik Eğitimi - Gün ${i + 1} (Yedek İçerik)`
-            }));
+            console.error("Chat Error:", error.message);
+            return { content: "Üzgünüm, şu an bağlantı kuramıyorum." };
         }
     }
 };
