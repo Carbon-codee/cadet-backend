@@ -18,6 +18,7 @@ const dayModuleSchema = mongoose.Schema({
     unlockDate: { type: Date }, // When this module becomes accessible
     questions: [questionSchema],
     score: { type: Number, default: 0 }, // Score for this day's quiz
+    completedAt: { type: Date } // Timestamp when the day was completed
 });
 
 const studyPlanSchema = mongoose.Schema({

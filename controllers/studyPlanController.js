@@ -233,9 +233,9 @@ const getStudyPlan = async (req, res) => {
     try {
         const { slug } = req.params;
         let plan;
+        const mongoose = require('mongoose');
 
         if (slug) {
-            const mongoose = require('mongoose');
             if (mongoose.Types.ObjectId.isValid(slug)) {
                 plan = await StudyPlan.findOne({ _id: slug });
             } else {
@@ -246,15 +246,106 @@ const getStudyPlan = async (req, res) => {
                 return res.status(403).json({ message: 'Bu planı görüntüleme yetkiniz yok.' });
             }
             if (!plan) return res.status(404).json({ message: 'Çalışma programı bulunamadı.' });
-            res.json(plan);
+
+            // --- DYNAMIC LOCK LOGIC (20-HOUR RULE) ---
+            const now = new Date();
+            const hours20 = 20 * 60 * 60 * 1000;
+
+            // Sort modules by dayNumber just in case
+            plan.modules.sort((a, b) => a.dayNumber - b.dayNumber);
+
+            // Create a new array of modules with computed lock status
+            // We do NOT save this to DB on every read to avoid write overhead,
+            // but we send the computed state to frontend.
+            const computedModules = plan.modules.map((module, index) => {
+                const mod = module.toObject ? module.toObject() : module;
+
+                // Day 1 is always unlocked
+                if (index === 0) {
+                    mod.isLocked = false;
+                    mod.unlockDate = new Date(plan.startDate); // or created date
+                    return mod;
+                }
+
+                const prevModule = plan.modules[index - 1];
+
+                // Rule 1: Previous day must be completed
+                if (!prevModule.isCompleted) {
+                    mod.isLocked = true;
+                    mod.unlockDate = null; // Not even scheduled yet
+                    mod.lockReason = "PREV_INCOMPLETE";
+                    return mod;
+                }
+
+                // Rule 2: 20 Hours must pass since previous completion
+                if (prevModule.completedAt) {
+                    const unlockTime = new Date(prevModule.completedAt.getTime() + hours20);
+
+                    if (now < unlockTime) {
+                        mod.isLocked = true;
+                        mod.unlockDate = unlockTime;
+                        mod.lockReason = "TIME_LOCKED";
+                    } else {
+                        mod.isLocked = false;
+                        mod.unlockDate = unlockTime; // Past date, meaning unlocked
+                    }
+                } else {
+                    // Fallback if completedAt is missing (should be fixed by migration, but safety net)
+                    mod.isLocked = false;
+                }
+
+                return mod;
+            });
+
+            // Convert mongoose doc to object and replace modules
+            const planObj = plan.toObject();
+            planObj.modules = computedModules;
+
+            res.json(planObj);
 
         } else {
             // Default: Get ALL active plans for the Matrix Dashboard (Max 3)
-            const activePlans = await StudyPlan.find({ student: req.user._id, isActive: true })
+            // We need to apply the logic here too for the dashboard summary
+            let activePlans = await StudyPlan.find({ student: req.user._id, isActive: true })
                 .populate('targetCompany', 'name')
                 .sort({ createdAt: -1 });
 
-            res.json(activePlans);
+            // Apply dynamic lock logic to each plan
+            const processedPlans = activePlans.map(plan => {
+                const planObj = plan.toObject();
+                const now = new Date();
+                const hours20 = 20 * 60 * 60 * 1000;
+
+                planObj.modules = planObj.modules.map((mod, index) => {
+                    if (index === 0) {
+                        mod.isLocked = false;
+                        return mod;
+                    }
+                    const prev = planObj.modules[index - 1];
+                    if (!prev.isCompleted) {
+                        mod.isLocked = true;
+                        mod.lockReason = "PREV_INCOMPLETE";
+                        return mod;
+                    }
+                    if (prev.completedAt) {
+                        const unlockTime = new Date(new Date(prev.completedAt).getTime() + hours20);
+                        if (now < unlockTime) {
+                            mod.isLocked = true;
+                            mod.unlockDate = unlockTime;
+                            mod.lockReason = "TIME_LOCKED";
+                        } else {
+                            mod.isLocked = false;
+                            mod.unlockDate = unlockTime;
+                        }
+                    } else {
+                        mod.isLocked = false;
+                    }
+                    return mod;
+                });
+                return planObj;
+            });
+
+            res.json(processedPlans);
         }
 
     } catch (error) {
@@ -268,7 +359,7 @@ const getStudyPlan = async (req, res) => {
 // @access  Private
 const submitDayResult = async (req, res) => {
     try {
-        const { planId, dayNumber, correctCount, correctQuestionIds } = req.body;
+        const { planId, dayNumber, correctCount, correctQuestionIds, correctDifficulties } = req.body;
         const mongoose = require('mongoose');
 
         let plan;
@@ -286,9 +377,8 @@ const submitDayResult = async (req, res) => {
         const module = plan.modules[moduleIndex];
 
         // RULE 1: Check minimum correct answers (10 required)
-        const actualCorrectCount = correctQuestionIds && Array.isArray(correctQuestionIds)
-            ? correctQuestionIds.length
-            : (correctCount || 0);
+        // Use correctCount as primary if available, or derive from arrays
+        const actualCorrectCount = correctCount || 0;
 
         const MIN_CORRECT_REQUIRED = 10;
 
@@ -310,22 +400,32 @@ const submitDayResult = async (req, res) => {
         let gainedXp = 0;
 
         console.log(`[DEBUG] Submitting Day Result for User: ${req.user._id}`);
-        console.log(`[DEBUG] correctQuestionIds:`, correctQuestionIds);
+        console.log(`[DEBUG] correctDifficulties:`, correctDifficulties);
 
-        if (correctQuestionIds && Array.isArray(correctQuestionIds)) {
-            // New Logic: Dynamic XP based on difficulty
+        if (correctDifficulties && Array.isArray(correctDifficulties)) {
+            // New Logic: Dynamic XP based on frontend-supplied difficulties
+            // This trusts the frontend, but we validate the counts implicitly by actualCorrectCount
+            correctDifficulties.forEach(diff => {
+                const d = diff ? diff.toLowerCase() : '';
+                if (d === 'zor') gainedXp += 20;
+                else if (d === 'orta') gainedXp += 10;
+                else if (d === 'kolay') gainedXp += 5;
+                else gainedXp += 10; // Default if unknown
+            });
+        } else if (correctQuestionIds && Array.isArray(correctQuestionIds)) {
+            // Fallback to checking IDs against DB if frontend didn't send difficulties
+            // (Legacy support or if questions are saved in DB)
             module.questions.forEach(q => {
-                // Ensure IDs are strings for comparison
                 const qId = q._id ? q._id.toString() : null;
                 if (qId && correctQuestionIds.includes(qId)) {
-                    if (q.difficulty === 'Zor') gainedXp += 10;
+                    if (q.difficulty === 'Zor') gainedXp += 20;
                     else if (q.difficulty === 'Kolay') gainedXp += 5;
-                    else gainedXp += 7; // Orta difficulty
+                    else gainedXp += 10;
                 }
             });
         } else {
-            // Fallback Logic
-            gainedXp = actualCorrectCount * 5;
+            // Last Resort Fallback
+            gainedXp = actualCorrectCount * 10; // Average 10 points
         }
 
         console.log(`[DEBUG] Calculated gainedXp: ${gainedXp}`);
@@ -336,30 +436,36 @@ const submitDayResult = async (req, res) => {
             {
                 $set: {
                     "modules.$.isCompleted": true,
-                    "modules.$.score": actualCorrectCount
+                    "modules.$.score": actualCorrectCount,
+                    "modules.$.completedAt": new Date() // Store completion time
                 }
             }
         );
 
-        // RULE 3: Unlock next day with 20-hour delay
+        // RULE 3: Unlock next day logic is now handled dynamically in getStudyPlan
+        // We no longer need to manually unlock the next day here.
+        // But for clarity/legacy, we might want to ensure the next day is technically "locked" in DB if we were using static bools,
+        // but since our getStudyPlan overrides it, we don't strictly *need* to touch the next day in DB.
+        // However, to keep DB state relatively sane, we can just leave it alone.
+
         const nextDayNumber = dayNumber + 1;
         const nextModuleIndex = plan.modules.findIndex(m => m.dayNumber === nextDayNumber);
+        let nextUnlockDate = null;
 
         if (nextModuleIndex !== -1) {
-            const unlockTime = new Date();
-            unlockTime.setHours(unlockTime.getHours() + 20); // 20 hours from now
+            const now = new Date();
+            nextUnlockDate = new Date(now.getTime() + 20 * 60 * 60 * 1000); // 20 hours from now
 
+            // Optional: We could update the DB to reflect this "planned" unlock time 
+            // so that other services (notifications) might use it without re-calculating.
             await StudyPlan.findOneAndUpdate(
                 { _id: plan._id, "modules.dayNumber": nextDayNumber },
                 {
                     $set: {
-                        "modules.$.isLocked": true, // Keep locked until unlockDate
-                        "modules.$.unlockDate": unlockTime
+                        "modules.$.unlockDate": nextUnlockDate
                     }
                 }
             );
-
-            console.log(`[UNLOCK] Day ${nextDayNumber} will unlock at: ${unlockTime}`);
         }
 
         // Update User XP atomically to prevent race conditions
