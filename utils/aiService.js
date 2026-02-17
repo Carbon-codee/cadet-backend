@@ -143,6 +143,56 @@ const aiService = {
             const videoUrl = await getPerfectVideo(result.videoSearchTerm || topic);
             result.youtubeUrl = videoUrl;
 
+            // --- ANSWER DISTRIBUTION BALANCER (5A, 5B, 5C, 5D) ---
+            if (result.questions && result.questions.length === 20) {
+                try {
+                    // 1. Create target indices bucket: [0,0,0,0,0, 1,1,1,1,1, 2,2,2,2,2, 3,3,3,3,3]
+                    let targetIndices = [
+                        ...Array(5).fill(0), // A
+                        ...Array(5).fill(1), // B
+                        ...Array(5).fill(2), // C
+                        ...Array(5).fill(3)  // D
+                    ];
+
+                    // 2. Shuffle the target indices to randomize which question gets which answer key
+                    for (let i = targetIndices.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [targetIndices[i], targetIndices[j]] = [targetIndices[j], targetIndices[i]];
+                    }
+
+                    // 3. Re-arrange options for each question
+                    result.questions = result.questions.map((q, idx) => {
+                        // Safety check: ensure we have 4 options and a correct answer that matches strictly
+                        if (!q.options || q.options.length < 4 || !q.correctAnswer) return q;
+
+                        const desiredCorrectIndex = targetIndices[idx]; // e.g., 2 (C)
+
+                        // Find the text of the correct answer
+                        const correctText = q.correctAnswer.trim();
+
+                        // Filter out the correct answer from options
+                        const otherOptions = q.options.filter(opt => opt.trim() !== correctText);
+
+                        // If we can't find the correct answer in options or something is wrong, skip
+                        if (otherOptions.length !== 3) return q;
+
+                        // Insert correct answer at the desired index
+                        const newOptions = [...otherOptions];
+                        newOptions.splice(desiredCorrectIndex, 0, correctText);
+
+                        return {
+                            ...q,
+                            options: newOptions
+                            // correctAnswer remains the same string, but its position in options is now fixed
+                        };
+                    });
+                    console.log("[AI Service] Answer distribution balanced successfully.");
+                } catch (balanceError) {
+                    console.error("[AI Service] Balancing error:", balanceError);
+                    // Fail silently, return original questions
+                }
+            }
+
             return result;
 
         } catch (error) {
@@ -150,7 +200,38 @@ const aiService = {
             // Hata olsa bile kullanıcıyı boş döndürme
             return {
                 content: `## Sistem Hatası\n\nYüksek kaliteli içerik oluşturulurken bir sorun yaşandı. Lütfen daha sonra tekrar deneyin.\n\n*Hata Kodu: ${error.message}*`,
-                questions: [],
+                questions: [
+                    {
+                        questionText: "Sistem hatası nedeniyle otomatik oluşturulan yedek soru 1?",
+                        options: ["A Şıkkı", "B Şıkkı", "C Şıkkı", "D Şıkkı"],
+                        correctAnswer: "A Şıkkı",
+                        difficulty: "Kolay"
+                    },
+                    {
+                        questionText: "Sistem hatası nedeniyle otomatik oluşturulan yedek soru 2?",
+                        options: ["A Şıkkı", "B Şıkkı", "C Şıkkı", "D Şıkkı"],
+                        correctAnswer: "A Şıkkı",
+                        difficulty: "Kolay"
+                    },
+                    {
+                        questionText: "Sistem hatası nedeniyle otomatik oluşturulan yedek soru 3?",
+                        options: ["A Şıkkı", "B Şıkkı", "C Şıkkı", "D Şıkkı"],
+                        correctAnswer: "A Şıkkı",
+                        difficulty: "Kolay"
+                    },
+                    {
+                        questionText: "Sistem hatası nedeniyle otomatik oluşturulan yedek soru 4?",
+                        options: ["A Şıkkı", "B Şıkkı", "C Şıkkı", "D Şıkkı"],
+                        correctAnswer: "A Şıkkı",
+                        difficulty: "Kolay"
+                    },
+                    {
+                        questionText: "Sistem hatası nedeniyle otomatik oluşturulan yedek soru 5?",
+                        options: ["A Şıkkı", "B Şıkkı", "C Şıkkı", "D Şıkkı"],
+                        correctAnswer: "A Şıkkı",
+                        difficulty: "Kolay"
+                    }
+                ],
                 youtubeUrl: "https://www.youtube.com/user/IMOHQ"
             };
         }

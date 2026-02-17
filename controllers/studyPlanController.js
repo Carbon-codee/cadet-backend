@@ -578,7 +578,10 @@ const getContentForDay = async (req, res) => {
         // Check triggers: Placeholder text, question count low, or explicitly "AI Generated" not present in deep check
         const isPlaceholder = (module.lectureContent.includes("hazırlanmaktadır") || module.lectureContent.includes("detaylarını öğreneceksiniz")) && module.lectureContent.length < 500;
 
-        if (isPlaceholder || module.questions.length < 5) {
+        // Revised Check: Check for Missing/Empty Questions or Placeholder Content
+        const isContentMissing = !module.questions || module.questions.length === 0 || module.questions.length < 5;
+
+        if (isPlaceholder || isContentMissing) {
             const aiService = require('../utils/aiService');
             const MasterLesson = require('../models/MasterLesson'); // Import here to avoid circular dep issues on top if any
 
@@ -648,7 +651,12 @@ const getContentForDay = async (req, res) => {
 
             let contentToUse = null;
 
-            if (masterLesson && !forceRefresh) {
+            // Revised Cache Check: Must have content AND valid questions (>= 5)
+            const isCacheValid = masterLesson &&
+                masterLesson.questions &&
+                masterLesson.questions.length >= 5;
+
+            if (isCacheValid && !forceRefresh) {
                 console.log(`[Cache Hit] Found MasterLesson for topic: ${module.topic}`);
                 contentToUse = {
                     content: masterLesson.content,
